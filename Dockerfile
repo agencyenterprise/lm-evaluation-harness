@@ -21,25 +21,17 @@ RUN pip install --no-cache-dir --upgrade pip
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
 
-# Install Python dependencies one by one to better identify issues
-RUN pip install --no-cache-dir fastapi==0.88.0
-RUN pip install --no-cache-dir uvicorn==0.20.0
-RUN pip install --no-cache-dir pydantic==1.10.4
-RUN pip install --no-cache-dir requests==2.28.2
-RUN pip install --no-cache-dir numpy==1.23.5
-RUN pip install --no-cache-dir python-dotenv==0.21.1
-RUN pip install --no-cache-dir pymongo==4.3.3
-RUN pip install --no-cache-dir regex==2022.10.31
-RUN pip install --no-cache-dir python-multipart==0.0.5
-RUN pip install --no-cache-dir huggingface_hub==0.13.3
-RUN pip install --no-cache-dir tokenizers==0.13.2
-RUN pip install --no-cache-dir datasets==2.9.0
+# Install Python dependencies all at once to save layers
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application
 COPY . .
 
-# Make startup script executable
-RUN chmod +x /app/start.sh
+# Make Python scripts executable
+RUN chmod +x /app/entrypoint.py
 
-# Command to run the application using the startup script
-CMD ["/app/start.sh"] 
+# Set default port for better visibility
+ENV PORT=8000
+
+# Command to run the application using Python directly
+CMD ["python", "/app/entrypoint.py"] 
