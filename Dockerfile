@@ -38,8 +38,8 @@ RUN pip install --no-cache-dir datasets==2.9.0
 # Copy the rest of the application
 COPY . .
 
-# Expose the port
-EXPOSE $PORT
+# Make startup script executable
+RUN chmod +x /app/start.sh
 
-# Command to run the application
-CMD uvicorn api:app --host 0.0.0.0 --port $PORT 
+# Command to run the application using the startup script
+CMD ["/app/start.sh"] 
