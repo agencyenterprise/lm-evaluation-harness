@@ -1,12 +1,20 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Optional, Union, Any
 import json
 import os
+import sys
+import traceback
 from dotenv import load_dotenv
 
 # Import the evaluation function
-from run_moral_stories_eval_gen import evaluate_moral_stories_with_openai, get_mongodb_connection
+try:
+    from run_moral_stories_eval_gen import evaluate_moral_stories_with_openai, get_mongodb_connection
+except ImportError as e:
+    print(f"Failed to import from run_moral_stories_eval_gen: {e}")
+    traceback.print_exc()
+    sys.exit(1)
 
 # Load environment variables
 load_dotenv()
@@ -15,6 +23,15 @@ app = FastAPI(
     title="Moral Stories Evaluation API",
     description="API for evaluating language models on moral reasoning tasks",
     version="1.0.0"
+)
+
+# Add CORS middleware to allow cross-origin requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
 )
 
 # Define request models
@@ -41,7 +58,44 @@ evaluation_results = {}
 
 @app.get("/")
 async def root():
-    return {"message": "Moral Stories Evaluation API is running"}
+    return {
+        "message": "Moral Stories Evaluation API is running",
+        "version": "1.0.0",
+        "endpoints": {
+            "/": "This info message",
+            "/evaluate": "POST - Start an evaluation",
+            "/result/{task_id}": "GET - Get evaluation results",
+            "/health": "GET - Check API health"
+        }
+    }
+
+@app.get("/health")
+async def health():
+    import platform
+    import sys
+    
+    # Check OpenAI API key
+    api_key_status = "Available" if os.environ.get("OPENAI_API_KEY") else "Missing"
+    
+    # Check MongoDB connection
+    mongo_status = "Not checked"
+    if os.environ.get("MONGODB_URI"):
+        try:
+            db = get_mongodb_connection()
+            mongo_status = "Connected" if db else "Failed to connect"
+        except Exception as e:
+            mongo_status = f"Error: {str(e)}"
+    else:
+        mongo_status = "No MongoDB URI provided"
+    
+    return {
+        "status": "healthy",
+        "python_version": sys.version,
+        "platform": platform.platform(),
+        "openai_api_key": api_key_status,
+        "mongodb": mongo_status,
+        "tasks_in_progress": len([k for k, v in evaluation_results.items() if v.get("status") == "processing"])
+    }
 
 @app.post("/evaluate", response_model=EvaluationResponse)
 async def evaluate(request: EvaluationRequest, background_tasks: BackgroundTasks):
@@ -78,6 +132,24 @@ async def get_result(task_id: str):
     
     return result
 
+@app.get("/debug")
+async def debug_info(request: Request):
+    """Endpoint for debugging the API environment"""
+    import platform
+    import sys
+    
+    # Get environment variables (excluding API keys)
+    env_vars = {k: v for k, v in os.environ.items() if not any(secret in k.lower() for secret in ['key', 'token', 'password', 'secret'])}
+    
+    return {
+        "python_version": sys.version,
+        "platform": platform.platform(),
+        "environment": env_vars,
+        "headers": dict(request.headers),
+        "client_host": request.client.host if request.client else None,
+        "base_url": str(request.base_url)
+    }
+
 def run_evaluation(
     task_id: str,
     model: str,
@@ -96,7 +168,16 @@ def run_evaluation(
     
     try:
         # Connect to DB if not skipping
-        db = None if skip_db else get_mongodb_connection()
+        db = None
+        if not skip_db:
+            try:
+                db = get_mongodb_connection()
+            except Exception as e:
+                evaluation_results[task_id] = {
+                    "status": "error",
+                    "message": f"MongoDB connection error: {str(e)}"
+                }
+                return
         
         # Process context and system prompt
         if system and context:
@@ -121,10 +202,14 @@ def run_evaluation(
             "result": result
         }
     except Exception as e:
+        error_trace = traceback.format_exc()
         evaluation_results[task_id] = {
             "status": "error",
-            "message": str(e)
+            "message": str(e),
+            "traceback": error_trace
         }
+        print(f"Error in task {task_id}: {e}")
+        print(error_trace)
 
 if __name__ == "__main__":
     import uvicorn

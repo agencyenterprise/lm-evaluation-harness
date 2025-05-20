@@ -1,5 +1,7 @@
-import setuptools
+from setuptools import setup, find_packages
 
-
-# This is to make sure that the package supports editable installs
-setuptools.setup()
+setup(
+    name="moral_stories_eval",
+    version="1.0.0",
+    packages=find_packages(),
+)
