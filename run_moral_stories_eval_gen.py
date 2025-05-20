@@ -284,7 +284,7 @@ def load_cached_moral_stories(cache_dir=None, force_download=False):
         print(f"Error loading dataset: {e}")
         print("Trying with data already in cache...")
         try:
-            dataset = load_dataset("demelin/moral_stories", "full", download_mode="force_local")
+            dataset = load_dataset("demelin/moral_stories", "full")
             elapsed = time.time() - start_time
             print(f"Dataset loaded from local cache in {elapsed:.2f} seconds!")
             return dataset
