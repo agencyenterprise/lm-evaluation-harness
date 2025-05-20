@@ -492,17 +492,6 @@ def main():
         help="System prompt to use if context doesn't already include one (optional)"
     )
     parser.add_argument(
-        "--cache_dir", 
-        type=str, 
-        default=None, 
-        help="Directory to use for caching the dataset (optional)"
-    )
-    parser.add_argument(
-        "--force_download", 
-        action="store_true", 
-        help="Force re-download of the dataset instead of using cache"
-    )
-    parser.add_argument(
         "--skip_db", 
         action="store_true", 
         help="Skip database operations (checking and saving)"
