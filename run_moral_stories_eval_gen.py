@@ -453,12 +453,9 @@ def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, c
     # Save to MongoDB if available
     if db is not None:
         save_results_to_db(db, serializable_results)
-    
-    # Also save to file
-    result_file = f"moral_stories_{model_name.replace('-', '_')}_{context_type}_results.json"
-    with open(result_file, "w") as f:
-        json.dump(serializable_results, f, indent=2)
-    print(f"\nResults saved to {result_file}")
+        print("\nResults saved to database")
+    else:
+        print("\nResults not saved to database (no database connection provided)")
     
     return serializable_results
 
