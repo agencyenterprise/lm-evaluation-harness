@@ -292,7 +292,7 @@ def load_cached_moral_stories(cache_dir=None, force_download=False):
             print(f"Error loading dataset from cache: {e2}")
             sys.exit(1)
 
-def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, context: Optional[Union[str, List, Dict]] = None, cache_dir=None, force_download=False, db=None):
+def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, context: Optional[Union[str, List, Dict]] = None, cache_dir=None, force_download=False, db=None, message_id=None):
     """Evaluate moral stories using OpenAI chat models."""
     # Check if baseline already exists in DB
     if db is not None and not context:  # This is a baseline evaluation
@@ -405,6 +405,10 @@ def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, c
         }
     }
     
+    # Add message ID if provided
+    if message_id:
+        results["message_id"] = message_id
+    
     # Add samples to results
     for i, (messages, response, moral_context, model_choice, correct_choice, choice_dict) in enumerate(
         zip(all_messages, responses, contexts, model_choices, correct_choices, choices)
@@ -428,6 +432,8 @@ def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, c
     print("\n=== Evaluation Results ===")
     print(f"Model: {model_name}")
     print(f"Context Type: {context_type}")
+    if message_id:
+        print(f"Message ID: {message_id}")
     print(f"Accuracy: {accuracy*100:.2f}% ({correct_count}/{len(model_choices)})")
     
     # Print individual results
@@ -504,6 +510,12 @@ def main():
         action="store_true", 
         help="Skip database operations (checking and saving)"
     )
+    parser.add_argument(
+        "--message_id", 
+        type=str, 
+        default=None, 
+        help="Optional message ID to associate with this evaluation (for tracking in frontend)"
+    )
     args = parser.parse_args()
 
     # Get context from file if specified
@@ -555,7 +567,8 @@ def main():
         context=context,
         cache_dir=args.cache_dir,
         force_download=args.force_download,
-        db=db
+        db=db,
+        message_id=args.message_id
     )
 
 if __name__ == "__main__":
