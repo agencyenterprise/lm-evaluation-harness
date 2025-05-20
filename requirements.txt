@@ -11,3 +11,4 @@ python-multipart==0.0.5
 datasets==2.9.0
 huggingface_hub==0.13.3
 tokenizers==0.13.2
+fsspec==2024.12.0
