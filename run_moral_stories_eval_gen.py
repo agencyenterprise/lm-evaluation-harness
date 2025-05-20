@@ -92,10 +92,11 @@ def save_results_to_db(db, results):
         collection = db[collection_name]
         
         # Add timestamp
-        results["timestamp"] = datetime.now()
+        results_copy = results.copy()
+        results_copy["timestamp"] = datetime.now()
         
         # Insert results
-        result = collection.insert_one(results)
+        result = collection.insert_one(results_copy)
         print(f"Saved results to database with ID: {result.inserted_id}")
         return result.inserted_id
     except Exception as e:
@@ -436,6 +437,9 @@ def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, c
         print(f"Correct Choice: {sample['correct_choice']} ({sample['options'][sample['correct_choice']]})")
         print(f"Model Choice: {sample['model_choice']}")
         print(f"Is Correct: {sample['is_correct']}")
+    
+    # Add timestamp directly to results before serialization
+    results["timestamp"] = datetime.now()
     
     # Make all data JSON serializable
     serializable_results = make_json_serializable(results)
