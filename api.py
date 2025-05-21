@@ -67,8 +67,8 @@ async def root():
         "endpoints": {
             "/": "This info message",
             "/evaluate": "POST - Start an evaluation",
-            "/result/{task_id}": "GET - Get evaluation results",
-            "/tasks": "GET - List all evaluation tasks and their statuses",
+            "/result/{task_id}": "GET - Get evaluation results (also removes completed tasks)",
+            "/tasks": "GET - List all tasks and statuses. Use ?clear_completed=true to clean up",
             "/health": "GET - Check API health"
         }
     }
@@ -169,12 +169,28 @@ async def get_result(task_id: str):
     if result["status"] == "processing":
         return {"status": "processing", "message": "Evaluation in progress"}
     
-    return result
+    # Task is completed or error, return the result and remove from memory
+    response_copy = result.copy()  # Create a copy to return
+    
+    # Clean up memory by removing the result from evaluation_results
+    # We only remove completed or error tasks, not processing ones
+    if result["status"] in ["completed", "error"]:
+        print(f"Removing task {task_id} from memory (status: {result['status']})")
+        evaluation_results.pop(task_id)
+    
+    return response_copy
 
 @app.get("/tasks")
-async def list_tasks():
-    """Get a list of all evaluation tasks and their statuses"""
+async def list_tasks(clear_completed: bool = False):
+    """Get a list of all evaluation tasks and their statuses
+    
+    Args:
+        clear_completed: If True, removes all completed and error tasks from memory
+    """
     tasks_summary = {}
+    
+    # Track which tasks to remove if clear_completed is True
+    tasks_to_remove = []
     
     for task_id, task_info in evaluation_results.items():
         status = task_info.get("status", "unknown")
@@ -195,6 +211,16 @@ async def list_tasks():
             "completed": end_time,
             "message_id": task_info.get("params", {}).get("message_id", None)
         }
+        
+        # Mark task for removal if it's completed or error and clear_completed is True
+        if clear_completed and status in ["completed", "error"]:
+            tasks_to_remove.append(task_id)
+    
+    # Clean up completed/error tasks if requested
+    if clear_completed and tasks_to_remove:
+        for task_id in tasks_to_remove:
+            evaluation_results.pop(task_id)
+        print(f"Removed {len(tasks_to_remove)} completed/error tasks from memory")
     
     # Count tasks by status
     status_counts = {}
@@ -205,7 +231,8 @@ async def list_tasks():
     return {
         "tasks": tasks_summary,
         "total": len(tasks_summary),
-        "status_counts": status_counts
+        "status_counts": status_counts,
+        "cleaned_up": len(tasks_to_remove) if clear_completed else 0
     }
 
 @app.get("/debug")
