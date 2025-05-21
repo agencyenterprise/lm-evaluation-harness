@@ -49,6 +49,7 @@ class EvaluationRequest(BaseModel):
     force_download: bool = False
     skip_db: bool = False
     use_local_dataset: bool = True
+    provider: str = "openai"  # 'openai' or 'anthropic'
 
 class EvaluationResponse(BaseModel):
     task_id: str
@@ -77,8 +78,9 @@ async def health():
     import platform
     import sys
     
-    # Check OpenAI API key
-    api_key_status = "Available" if os.environ.get("OPENAI_API_KEY") else "Missing"
+    # Check API keys
+    openai_key_status = "Available" if os.environ.get("OPENAI_API_KEY") else "Missing"
+    anthropic_key_status = "Available" if os.environ.get("ANTHROPIC_API_KEY") else "Missing"
     
     # Check MongoDB connection
     mongo_status = "Not checked"
@@ -91,11 +93,18 @@ async def health():
     else:
         mongo_status = "No MongoDB URI provided"
     
+    # Get all environment variable names (not values) for debugging
+    env_vars = list(os.environ.keys())
+    
     return {
         "status": "healthy",
         "python_version": sys.version,
         "platform": platform.platform(),
-        "openai_api_key": api_key_status,
+        "api_keys": {
+            "openai": openai_key_status,
+            "anthropic": anthropic_key_status
+        },
+        "env_vars_available": env_vars,
         "mongodb": mongo_status,
         "tasks_in_progress": len([k for k, v in evaluation_results.items() if v.get("status") == "processing"])
     }
@@ -113,6 +122,7 @@ async def evaluate(request: EvaluationRequest, background_tasks: BackgroundTasks
     # Log the parameters received from frontend
     print(f"\n=== Received Evaluation Request (Task ID: {task_id}) ===")
     print(f"Model: {request.model}")
+    print(f"Provider: {request.provider}")
     print(f"Examples: {request.examples}")
     print(f"Context Type: {type(request.context)}")
     print(f"Context: {request.context}")
@@ -139,7 +149,8 @@ async def evaluate(request: EvaluationRequest, background_tasks: BackgroundTasks
         message_id=request.message_id,
         force_download=request.force_download,
         skip_db=request.skip_db,
-        use_local_dataset=request.use_local_dataset
+        use_local_dataset=request.use_local_dataset,
+        provider=request.provider
     )
     
     return EvaluationResponse(
@@ -224,7 +235,8 @@ def run_evaluation(
     message_id: Optional[str],
     force_download: bool,
     skip_db: bool,
-    use_local_dataset: bool = True
+    use_local_dataset: bool = True,
+    provider: str = "openai"
 ):
     # Set initial status and store input parameters
     evaluation_results[task_id] = {
@@ -232,6 +244,7 @@ def run_evaluation(
         "message": f"Processing evaluation for {model}",
         "params": {
             "model": model,
+            "provider": provider,
             "examples": examples,
             "context_type": type(context).__name__,
             "context_sample": str(context)[:100] + "..." if context and len(str(context)) > 100 else str(context),
@@ -245,6 +258,7 @@ def run_evaluation(
     
     print(f"\n=== Starting Evaluation (Task ID: {task_id}) ===")
     print(f"Model: {model}")
+    print(f"Provider: {provider}")
     print(f"Examples: {examples}")
     print(f"Using local dataset: {use_local_dataset}")
     if not use_local_dataset:
@@ -317,7 +331,8 @@ def run_evaluation(
             cache_dir="/tmp/hf_cache_moral_stories",
             db=db,
             message_id=message_id,
-            use_local_dataset=use_local_dataset
+            use_local_dataset=use_local_dataset,
+            provider=provider
         )
         
         print(f"Evaluation completed successfully")

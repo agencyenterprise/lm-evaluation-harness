@@ -103,8 +103,12 @@ def save_results_to_db(db, results):
         print(f"Error saving to database: {e}")
         return None
 
-def get_api_key():
-    """Get API key from .env file or environment variables."""
+def get_api_key(provider="openai"):
+    """Get API key from .env file or environment variables.
+    
+    Args:
+        provider: Which provider's API key to return ('openai' or 'anthropic')
+    """
     # Try to load from .env file in the current or parent directories
     env_paths = [
         '.env',                      # Current directory
@@ -119,31 +123,39 @@ def get_api_key():
             print(f"Loaded environment from {env_path}")
             break
     
-    # First check for OpenAI API key
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if api_key:
-        return "openai", api_key
+    # Print available environment variables (for debugging)
+    print(f"\nLooking for {provider} API key...")
+    env_vars = list(os.environ.keys())
+    api_keys_found = []
+    if "OPENAI_API_KEY" in env_vars:
+        api_keys_found.append("OPENAI_API_KEY")
+    if "ANTHROPIC_API_KEY" in env_vars:
+        api_keys_found.append("ANTHROPIC_API_KEY")
     
-    # Then check for Anthropic API key
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if api_key:
-        return "anthropic", api_key
+    print(f"API keys found in environment: {', '.join(api_keys_found) if api_keys_found else 'None'}")
     
-    # If still no key, raise error
-    raise ValueError(
-        "No API key found. Please set either OPENAI_API_KEY or ANTHROPIC_API_KEY "
-        "in your environment or .env file."
-    )
+    # Return the appropriate API key based on provider
+    if provider == "anthropic":
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if api_key:
+            print(f"Found Anthropic API key (length: {len(api_key)})")
+            return "anthropic", api_key
+        raise ValueError("Anthropic API key not found. Please set ANTHROPIC_API_KEY in your environment or .env file.")
+    else:  # Default to OpenAI
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if api_key:
+            print(f"Found OpenAI API key (length: {len(api_key)})")
+            return "openai", api_key
+        raise ValueError("OpenAI API key not found. Please set OPENAI_API_KEY in your environment or .env file.")
 
 def create_openai_chat_completion(
     model: str, 
-    messages: List[Dict[str, str]]
+    messages: List[Dict[str, str]],
+    max_tokens: int = 100,
+    temperature: float = 0
 ) -> str:
     """Call the OpenAI Chat Completions API with a list of messages."""
-    api_type, api_key = get_api_key()
-    
-    if api_type != "openai":
-        raise ValueError("OpenAI API key not found. Please set OPENAI_API_KEY in your environment or .env file.")
+    api_type, api_key = get_api_key("openai")
     
     headers = {
         "Content-Type": "application/json",
@@ -152,7 +164,9 @@ def create_openai_chat_completion(
     
     payload = {
         "model": model,
-        "messages": messages
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature
     }
     
     response = requests.post(
@@ -165,6 +179,66 @@ def create_openai_chat_completion(
         raise Exception(f"API Error: {response.status_code}, {response.text}")
     
     return response.json()["choices"][0]["message"]["content"]
+
+def create_anthropic_chat_completion(
+    model: str, 
+    messages: List[Dict[str, str]],
+    max_tokens: int = 100,
+    temperature: float = 0
+) -> str:
+    """Call the Anthropic Chat Completions API with a list of messages."""
+    api_type, api_key = get_api_key("anthropic")
+    
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01"
+    }
+    
+    # Convert OpenAI message format to Anthropic format
+    # Anthropic expects a system prompt and then an alternating series of user/assistant messages
+    system_content = ""
+    converted_messages = []
+    
+    for msg in messages:
+        if msg["role"] == "system":
+            system_content = msg["content"]
+        elif msg["role"] == "user":
+            converted_messages.append({"role": "user", "content": msg["content"]})
+        elif msg["role"] == "assistant":
+            converted_messages.append({"role": "assistant", "content": msg["content"]})
+    
+    payload = {
+        "model": model,
+        "messages": converted_messages,
+        "system": system_content,
+        "max_tokens": max_tokens,
+        "temperature": temperature
+    }
+    
+    response = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers=headers,
+        json=payload
+    )
+    
+    if response.status_code != 200:
+        raise Exception(f"API Error: {response.status_code}, {response.text}")
+    
+    return response.json()["content"][0]["text"]
+
+def create_chat_completion(
+    provider: str,
+    model: str, 
+    messages: List[Dict[str, str]],
+    max_tokens: int = 100,
+    temperature: float = 0
+) -> str:
+    """Create a chat completion using either OpenAI or Anthropic based on provider."""
+    if provider == "anthropic":
+        return create_anthropic_chat_completion(model, messages, max_tokens, temperature)
+    else:  # Default to OpenAI
+        return create_openai_chat_completion(model, messages, max_tokens, temperature)
 
 def parse_conversation_context(context: Union[str, List, Dict]) -> List[Dict[str, str]]:
     """Parse conversation context into a list of message objects.
@@ -355,17 +429,27 @@ def load_moral_stories_local():
         print(f"Traceback: {traceback.format_exc()}")
         sys.exit(1)
 
-def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, context: Optional[Union[str, List, Dict]] = None, cache_dir=None, db=None, message_id=None, use_local_dataset=True):
-    """Evaluate moral stories using OpenAI chat models.
+def evaluate_moral_stories_with_openai(
+    model_name: str, 
+    num_examples: int = 5, 
+    context: Optional[Union[str, List, Dict]] = None, 
+    cache_dir=None, 
+    db=None, 
+    message_id=None, 
+    use_local_dataset=True,
+    provider="openai"
+):
+    """Evaluate moral stories using chat models.
     
     Args:
-        model_name: The OpenAI model to use for evaluation
+        model_name: The model to use for evaluation (e.g., 'gpt-4', 'claude-3-opus-20240229')
         num_examples: Number of examples to evaluate
         context: Optional context/prompt to prepend to queries
         cache_dir: Directory to use for downloading and caching the dataset
         db: Optional MongoDB connection for storing results
         message_id: Optional message ID to associate with evaluation
         use_local_dataset: Whether to use the local dataset files instead of downloading
+        provider: AI provider to use ('openai' or 'anthropic')
     """
     # Check if baseline already exists in DB
     if db is not None and not context:  # This is a baseline evaluation
@@ -437,8 +521,8 @@ def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, c
         choices.append({"A": moral_action, "B": immoral_action})
         correct_choices.append("A")  # A is always the moral action
 
-    # Generate responses using OpenAI API
-    print(f"Generating responses from {model_name} ({context_type})...")
+    # Generate responses using the specified API
+    print(f"Generating responses from {model_name} using {provider} API ({context_type})...")
     responses = []
     model_choices = []
     
@@ -447,7 +531,7 @@ def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, c
         print(f"Context: {moral_context}")
         
         try:
-            response = create_openai_chat_completion(model_name, messages)
+            response = create_chat_completion(provider, model_name, messages)
             responses.append(response)
             print(f"Response: {response}")
             
@@ -545,7 +629,14 @@ def main():
         "--model", 
         type=str, 
         default="gpt-3.5-turbo", 
-        help="OpenAI model name (e.g., 'gpt-3.5-turbo', 'gpt-4', 'gpt-4o')"
+        help="Model name (e.g., 'gpt-3.5-turbo', 'gpt-4', 'claude-3-opus-20240229')"
+    )
+    parser.add_argument(
+        "--provider",
+        type=str,
+        default="openai",
+        choices=["openai", "anthropic"],
+        help="AI provider to use (openai or anthropic)"
     )
     parser.add_argument(
         "--examples", 
@@ -645,7 +736,8 @@ def main():
         cache_dir=args.cache_dir,
         db=db,
         message_id=args.message_id,
-        use_local_dataset=args.use_local_dataset
+        use_local_dataset=args.use_local_dataset,
+        provider=args.provider
     )
 
 if __name__ == "__main__":
