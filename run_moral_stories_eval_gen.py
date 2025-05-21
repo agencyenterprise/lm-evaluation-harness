@@ -292,17 +292,58 @@ def load_cached_moral_stories(cache_dir=None, force_download=False):
             print(f"Error loading dataset from cache: {e2}")
             sys.exit(1)
 
-def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, context: Optional[Union[str, List, Dict]] = None, cache_dir=None, force_download=False, db=None, message_id=None):
-    """Evaluate moral stories using OpenAI chat models."""
+def load_moral_stories_force_redownload(cache_dir=None):
+    """Load the moral_stories dataset with force redownload to bypass broken cached files."""
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        print("Please install the datasets library: pip install datasets")
+        sys.exit(1)
+    
+    # Use a fresh temp cache directory that is guaranteed local and writable
+    if cache_dir is None:
+        cache_dir = "/tmp/hf_cache_moral_stories"
+    os.makedirs(cache_dir, exist_ok=True)
+    print(f"Using cache directory: {cache_dir}")
+
+    # Force redownload every time to avoid cached loading error
+    print(f"Loading moral_stories dataset with force_redownload...")
+    start_time = time.time()
+    
+    try:
+        dataset = load_dataset(
+            "demelin/moral_stories", 
+            "full", 
+            cache_dir=cache_dir,
+            download_mode="force_redownload"
+        )
+        elapsed = time.time() - start_time
+        print(f"Dataset loaded successfully in {elapsed:.2f} seconds!")
+        return dataset
+    except Exception as e:
+        print(f"Error loading dataset with force_redownload: {e}")
+        sys.exit(1)
+
+def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, context: Optional[Union[str, List, Dict]] = None, cache_dir=None, db=None, message_id=None):
+    """Evaluate moral stories using OpenAI chat models.
+    
+    Args:
+        model_name: The OpenAI model to use for evaluation
+        num_examples: Number of examples to evaluate
+        context: Optional context/prompt to prepend to queries
+        cache_dir: Directory to use for downloading and caching the dataset
+        db: Optional MongoDB connection for storing results
+        message_id: Optional message ID to associate with evaluation
+    """
     # Check if baseline already exists in DB
     if db is not None and not context:  # This is a baseline evaluation
         exists, existing_result = check_baseline_exists(db, model_name, num_examples)
-        if exists and not force_download:
+        if exists:
             print(f"Using existing baseline evaluation for {model_name} from database")
             return existing_result
     
-    # Load dataset with caching options
-    dataset = load_cached_moral_stories(cache_dir, force_download)
+    # Load dataset with force redownload to bypass local cache issues
+    dataset = load_moral_stories_force_redownload(cache_dir)
     
     # Parse the context
     parsed_context = parse_conversation_context(context)
@@ -492,6 +533,12 @@ def main():
         help="System prompt to use if context doesn't already include one (optional)"
     )
     parser.add_argument(
+        "--cache_dir",
+        type=str,
+        default="/tmp/hf_cache_moral_stories",
+        help="Directory to use for caching datasets (default: /tmp/hf_cache_moral_stories)"
+    )
+    parser.add_argument(
         "--skip_db", 
         action="store_true", 
         help="Skip database operations (checking and saving)"
@@ -552,7 +599,6 @@ def main():
         num_examples=args.examples, 
         context=context,
         cache_dir=args.cache_dir,
-        force_download=args.force_download,
         db=db,
         message_id=args.message_id
     )

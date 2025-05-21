@@ -191,7 +191,7 @@ def run_evaluation(
             model_name=model,
             num_examples=examples,
             context=context,
-            force_download=force_download,
+            cache_dir="/tmp/hf_cache_moral_stories",
             db=db,
             message_id=message_id
         )
