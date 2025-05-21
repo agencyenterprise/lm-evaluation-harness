@@ -137,9 +137,7 @@ def get_api_key():
 
 def create_openai_chat_completion(
     model: str, 
-    messages: List[Dict[str, str]],
-    max_tokens: int = 100,
-    temperature: float = 0
+    messages: List[Dict[str, str]]
 ) -> str:
     """Call the OpenAI Chat Completions API with a list of messages."""
     api_type, api_key = get_api_key()
@@ -154,9 +152,7 @@ def create_openai_chat_completion(
     
     payload = {
         "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature
+        "messages": messages
     }
     
     response = requests.post(

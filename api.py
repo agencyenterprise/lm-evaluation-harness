@@ -66,6 +66,7 @@ async def root():
             "/": "This info message",
             "/evaluate": "POST - Start an evaluation",
             "/result/{task_id}": "GET - Get evaluation results",
+            "/tasks": "GET - List all evaluation tasks and their statuses",
             "/health": "GET - Check API health"
         }
     }
@@ -100,7 +101,13 @@ async def health():
 
 @app.post("/evaluate", response_model=EvaluationResponse)
 async def evaluate(request: EvaluationRequest, background_tasks: BackgroundTasks):
-    task_id = f"task_{len(evaluation_results) + 1}"
+    # Use message_id as task_id if provided, otherwise generate one
+    if request.message_id:
+        task_id = request.message_id
+        print(f"Using message_id as task_id: {task_id}")
+    else:
+        task_id = f"task_{len(evaluation_results) + 1}"
+        print(f"No message_id provided, generated task_id: {task_id}")
     
     # Log the parameters received from frontend
     print(f"\n=== Received Evaluation Request (Task ID: {task_id}) ===")
@@ -113,6 +120,12 @@ async def evaluate(request: EvaluationRequest, background_tasks: BackgroundTasks
     print(f"Skip DB: {request.skip_db}")
     print("=" * 50)
     
+    # Check if system prompt is empty
+    system = request.system
+    if system is not None and not system.strip():
+        print("Empty system prompt received, treating as None")
+        system = None
+    
     # Set the evaluation task to run in the background
     background_tasks.add_task(
         run_evaluation,
@@ -120,7 +133,7 @@ async def evaluate(request: EvaluationRequest, background_tasks: BackgroundTasks
         model=request.model,
         examples=request.examples,
         context=request.context,
-        system=request.system,
+        system=system,
         message_id=request.message_id,
         force_download=request.force_download,
         skip_db=request.skip_db
@@ -143,6 +156,43 @@ async def get_result(task_id: str):
         return {"status": "processing", "message": "Evaluation in progress"}
     
     return result
+
+@app.get("/tasks")
+async def list_tasks():
+    """Get a list of all evaluation tasks and their statuses"""
+    tasks_summary = {}
+    
+    for task_id, task_info in evaluation_results.items():
+        status = task_info.get("status", "unknown")
+        model = task_info.get("params", {}).get("model", "unknown")
+        started = task_info.get("params", {}).get("start_time", "unknown")
+        
+        # Get completion or error time
+        end_time = (
+            task_info.get("completion_time") if status == "completed" 
+            else task_info.get("error_time") if status == "error"
+            else None
+        )
+        
+        tasks_summary[task_id] = {
+            "status": status,
+            "model": model,
+            "started": started,
+            "completed": end_time,
+            "message_id": task_info.get("params", {}).get("message_id", None)
+        }
+    
+    # Count tasks by status
+    status_counts = {}
+    for task in tasks_summary.values():
+        status = task["status"]
+        status_counts[status] = status_counts.get(status, 0) + 1
+    
+    return {
+        "tasks": tasks_summary,
+        "total": len(tasks_summary),
+        "status_counts": status_counts
+    }
 
 @app.get("/debug")
 async def debug_info(request: Request):
@@ -237,6 +287,11 @@ def run_evaluation(
             except Exception as e:
                 print(f"Error converting context: {e}")
                 raise ValueError(f"Failed to process context: {e}")
+        
+        # Check if system prompt is empty and treat as None
+        if system is not None and not system.strip():
+            print("System prompt is empty, treating as None")
+            system = None
         
         if system and context:
             if isinstance(context, list) and not any(msg.get('role') == 'system' for msg in context if isinstance(msg, dict)):
