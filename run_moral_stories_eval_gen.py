@@ -150,9 +150,7 @@ def get_api_key(provider="openai"):
 
 def create_openai_chat_completion(
     model: str, 
-    messages: List[Dict[str, str]],
-    max_tokens: int = 100,
-    temperature: float = 0
+    messages: List[Dict[str, str]]
 ) -> str:
     """Call the OpenAI Chat Completions API with a list of messages."""
     api_type, api_key = get_api_key("openai")
@@ -164,9 +162,7 @@ def create_openai_chat_completion(
     
     payload = {
         "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature
+        "messages": messages
     }
     
     response = requests.post(
@@ -182,9 +178,7 @@ def create_openai_chat_completion(
 
 def create_anthropic_chat_completion(
     model: str, 
-    messages: List[Dict[str, str]],
-    max_tokens: int = 100,
-    temperature: float = 0
+    messages: List[Dict[str, str]]
 ) -> str:
     """Call the Anthropic Chat Completions API with a list of messages."""
     api_type, api_key = get_api_key("anthropic")
@@ -211,9 +205,7 @@ def create_anthropic_chat_completion(
     payload = {
         "model": model,
         "messages": converted_messages,
-        "system": system_content,
-        "max_tokens": max_tokens,
-        "temperature": temperature
+        "system": system_content
     }
     
     response = requests.post(
@@ -230,15 +222,13 @@ def create_anthropic_chat_completion(
 def create_chat_completion(
     provider: str,
     model: str, 
-    messages: List[Dict[str, str]],
-    max_tokens: int = 100,
-    temperature: float = 0
+    messages: List[Dict[str, str]]
 ) -> str:
     """Create a chat completion using either OpenAI or Anthropic based on provider."""
     if provider == "anthropic":
-        return create_anthropic_chat_completion(model, messages, max_tokens, temperature)
+        return create_anthropic_chat_completion(model, messages)
     else:  # Default to OpenAI
-        return create_openai_chat_completion(model, messages, max_tokens, temperature)
+        return create_openai_chat_completion(model, messages)
 
 def parse_conversation_context(context: Union[str, List, Dict]) -> List[Dict[str, str]]:
     """Parse conversation context into a list of message objects.
