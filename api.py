@@ -8,6 +8,7 @@ import sys
 import traceback
 from dotenv import load_dotenv
 from datetime import datetime
+import time
 
 # Import the evaluation function
 try:
@@ -161,24 +162,60 @@ async def evaluate(request: EvaluationRequest, background_tasks: BackgroundTasks
 
 @app.get("/result/{task_id}")
 async def get_result(task_id: str):
-    if task_id not in evaluation_results:
-        raise HTTPException(status_code=404, detail="Task not found")
+    # First check if task is in memory
+    if task_id in evaluation_results:
+        result = evaluation_results[task_id]
+        
+        if result["status"] == "processing":
+            # Add the progress information to the response for processing tasks
+            progress = result.get("progress", {"current": 0, "total": 0, "percent": 0})
+            return {
+                "status": "processing", 
+                "message": "Evaluation in progress",
+                "progress": progress
+            }
+        
+        # Task is completed or error, return the result and remove from memory
+        response_copy = result.copy()  # Create a copy to return
+        
+        # Clean up memory by removing the result from evaluation_results
+        # We only remove completed or error tasks, not processing ones
+        if result["status"] in ["completed", "error"]:
+            print(f"Removing task {task_id} from memory (status: {result['status']})")
+            evaluation_results.pop(task_id)
+        
+        return response_copy
     
-    result = evaluation_results[task_id]
+    # If task is not in memory, check MongoDB for the result
+    # This is useful for retrieving historical results
+    try:
+        # Only try to check DB if task_id might be a message_id
+        if not task_id.startswith("task_") and len(task_id) > 10:
+            print(f"Task {task_id} not found in memory, checking MongoDB...")
+            db = get_mongodb_connection()
+            
+            # Check both collections
+            for collection_name in ["baseline_results", "with_context_results"]:
+                collection = db[collection_name]
+                stored_result = collection.find_one({"message_id": task_id})
+                
+                if stored_result:
+                    print(f"Found result for task {task_id} in MongoDB ({collection_name})")
+                    # Make the stored result compatible with the API format
+                    return {
+                        "status": "completed",
+                        "result": stored_result,
+                        "retrieved_from": "database",
+                        "collection": collection_name
+                    }
+            
+            # If we reach here, the result was not found in the database
+            print(f"Result for task {task_id} not found in MongoDB")
+    except Exception as e:
+        print(f"Error checking MongoDB for task {task_id}: {e}")
     
-    if result["status"] == "processing":
-        return {"status": "processing", "message": "Evaluation in progress"}
-    
-    # Task is completed or error, return the result and remove from memory
-    response_copy = result.copy()  # Create a copy to return
-    
-    # Clean up memory by removing the result from evaluation_results
-    # We only remove completed or error tasks, not processing ones
-    if result["status"] in ["completed", "error"]:
-        print(f"Removing task {task_id} from memory (status: {result['status']})")
-        evaluation_results.pop(task_id)
-    
-    return response_copy
+    # If task is not found in memory or DB, return 404
+    raise HTTPException(status_code=404, detail=f"Task {task_id} not found in memory or database")
 
 @app.get("/tasks")
 async def list_tasks(clear_completed: bool = False):
@@ -204,12 +241,16 @@ async def list_tasks(clear_completed: bool = False):
             else None
         )
         
+        # Get progress information
+        progress = task_info.get("progress", {"current": 0, "total": 0, "percent": 0})
+        
         tasks_summary[task_id] = {
             "status": status,
             "model": model,
             "started": started,
             "completed": end_time,
-            "message_id": task_info.get("params", {}).get("message_id", None)
+            "message_id": task_info.get("params", {}).get("message_id", None),
+            "progress": progress
         }
         
         # Mark task for removal if it's completed or error and clear_completed is True
@@ -269,6 +310,11 @@ def run_evaluation(
     evaluation_results[task_id] = {
         "status": "processing",
         "message": f"Processing evaluation for {model}",
+        "progress": {
+            "current": 0,
+            "total": examples,
+            "percent": 0
+        },
         "params": {
             "model": model,
             "provider": provider,
@@ -351,6 +397,11 @@ def run_evaluation(
         
         # Run the evaluation
         print(f"Starting evaluation_moral_stories_with_openai...")
+        
+        # Create a progress callback for this task
+        def progress_callback(current, total):
+            update_progress(task_id, current, total)
+        
         result = evaluate_moral_stories_with_openai(
             model_name=model,
             num_examples=examples,
@@ -359,32 +410,84 @@ def run_evaluation(
             db=db,
             message_id=message_id,
             use_local_dataset=use_local_dataset,
-            provider=provider
+            provider=provider,
+            progress_callback=progress_callback
         )
         
         print(f"Evaluation completed successfully")
         
-        # Store and return the result
-        evaluation_results[task_id] = {
+        # Create a temporary copy of result to save in memory
+        temp_result = {
             "status": "completed",
             "result": result,
             "params": evaluation_results[task_id].get("params", {}),
             "completion_time": str(datetime.now())
         }
+        
+        # Store result before removing from memory
+        if task_id in evaluation_results:
+            evaluation_results[task_id] = temp_result
+            
+            # Remove from memory now that it's completed and saved to DB
+            print(f"Task {task_id} completed and saved to DB. Removing from memory.")
+            # Add a small delay to ensure any current API requests can access the result
+            time.sleep(0.5)
+            
+            # Only remove if it's still there and hasn't been removed by another process
+            if task_id in evaluation_results:
+                evaluation_results.pop(task_id)
+                print(f"Removed task {task_id} from memory.")
+            
         print(f"=== Evaluation Complete (Task ID: {task_id}) ===")
+        
+        # Return the result even though we've removed it from memory
+        return temp_result
+        
     except Exception as e:
         error_trace = traceback.format_exc()
         print(f"Error in evaluation: {str(e)}")
         print(error_trace)
-        evaluation_results[task_id] = {
+        
+        # Update the error status
+        error_result = {
             "status": "error",
             "message": str(e),
             "traceback": error_trace,
             "params": evaluation_results[task_id].get("params", {}),
             "error_time": str(datetime.now())
         }
+        
+        # Store in memory briefly
+        if task_id in evaluation_results:
+            evaluation_results[task_id] = error_result
+            
+            # Remove from memory after storing the error
+            print(f"Task {task_id} encountered error. Removing from memory.")
+            time.sleep(0.5)
+            
+            # Only remove if it's still there
+            if task_id in evaluation_results:
+                evaluation_results.pop(task_id)
+                print(f"Removed errored task {task_id} from memory.")
+                
         print(f"Error in task {task_id}: {e}")
         print(f"=== Evaluation Failed (Task ID: {task_id}) ===")
+        
+        # Return the error result
+        return error_result
+
+# Create a progress update function that we can pass to the evaluation function
+def update_progress(task_id, current, total):
+    """Update the progress of a task"""
+    if task_id not in evaluation_results:
+        return
+    
+    evaluation_results[task_id]["progress"] = {
+        "current": current,
+        "total": total,
+        "percent": int((current / total) * 100) if total > 0 else 0
+    }
+    print(f"Task {task_id}: Progress {current}/{total} ({int((current / total) * 100)}%)")
 
 if __name__ == "__main__":
     import uvicorn

@@ -428,7 +428,8 @@ def evaluate_moral_stories_with_openai(
     db=None, 
     message_id=None, 
     use_local_dataset=True,
-    provider="openai"
+    provider="openai",
+    progress_callback=None
 ):
     """Evaluate moral stories using chat models.
     
@@ -441,6 +442,7 @@ def evaluate_moral_stories_with_openai(
         message_id: Optional message ID to associate with evaluation
         use_local_dataset: Whether to use the local dataset files instead of downloading
         provider: AI provider to use ('openai' or 'anthropic')
+        progress_callback: Optional callback function to report progress (current, total)
     """
     # Check if baseline already exists in DB
     if db is not None and not context:  # This is a baseline evaluation
@@ -536,10 +538,18 @@ def evaluate_moral_stories_with_openai(
                 # If no clear A or B is found, default to 'X'
                 model_choices.append('X')
                 print("Could not extract a clear A or B choice")
+                
+            # Report progress if callback is provided
+            if progress_callback:
+                progress_callback(i+1, num_examples)
         except Exception as e:
             print(f"Error: {e}")
             responses.append(f"ERROR: {str(e)}")
             model_choices.append('X')
+            
+            # Report progress even for errors
+            if progress_callback:
+                progress_callback(i+1, num_examples)
     
     # Calculate accuracy
     correct_count = sum(1 for mc, cc in zip(model_choices, correct_choices) if mc == cc)
