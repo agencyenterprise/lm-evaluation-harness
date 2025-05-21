@@ -7,6 +7,7 @@ import os
 import sys
 import traceback
 from dotenv import load_dotenv
+from datetime import datetime
 
 # Import the evaluation function
 try:
@@ -101,6 +102,17 @@ async def health():
 async def evaluate(request: EvaluationRequest, background_tasks: BackgroundTasks):
     task_id = f"task_{len(evaluation_results) + 1}"
     
+    # Log the parameters received from frontend
+    print(f"\n=== Received Evaluation Request (Task ID: {task_id}) ===")
+    print(f"Model: {request.model}")
+    print(f"Examples: {request.examples}")
+    print(f"Context Type: {type(request.context)}")
+    print(f"Context: {request.context}")
+    print(f"System: {request.system}")
+    print(f"Message ID: {request.message_id}")
+    print(f"Skip DB: {request.skip_db}")
+    print("=" * 50)
+    
     # Set the evaluation task to run in the background
     background_tasks.add_task(
         run_evaluation,
@@ -160,33 +172,82 @@ def run_evaluation(
     force_download: bool,
     skip_db: bool
 ):
-    # Set initial status
+    # Set initial status and store input parameters
     evaluation_results[task_id] = {
         "status": "processing",
-        "message": f"Processing evaluation for {model}"
+        "message": f"Processing evaluation for {model}",
+        "params": {
+            "model": model,
+            "examples": examples,
+            "context_type": type(context).__name__,
+            "context_sample": str(context)[:100] + "..." if context and len(str(context)) > 100 else str(context),
+            "system": system,
+            "message_id": message_id,
+            "skip_db": skip_db,
+            "start_time": str(datetime.now())
+        }
     }
+    
+    print(f"\n=== Starting Evaluation (Task ID: {task_id}) ===")
+    print(f"Model: {model}")
+    print(f"Examples: {examples}")
+    print(f"Using cache_dir: /tmp/hf_cache_moral_stories")
     
     try:
         # Connect to DB if not skipping
         db = None
         if not skip_db:
             try:
+                print(f"Connecting to MongoDB...")
                 db = get_mongodb_connection()
+                print(f"MongoDB connection successful")
             except Exception as e:
+                print(f"MongoDB connection error: {str(e)}")
                 evaluation_results[task_id] = {
                     "status": "error",
                     "message": f"MongoDB connection error: {str(e)}"
                 }
                 return
+        else:
+            print(f"Skipping MongoDB connection (skip_db=True)")
         
         # Process context and system prompt
+        print(f"Processing context and system prompt...")
+        
+        # Convert MessageModel objects to dictionaries if needed
+        if isinstance(context, list):
+            try:
+                # Check if we have MessageModel objects and convert them to dicts
+                converted_context = []
+                for msg in context:
+                    if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                        # This is likely a MessageModel - convert to dict
+                        converted_context.append({
+                            'role': msg.role,
+                            'content': msg.content
+                        })
+                    elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                        # Already a proper dict
+                        converted_context.append(msg)
+                    else:
+                        raise ValueError(f"Invalid message format: {msg}")
+                
+                context = converted_context
+                print(f"Converted {len(converted_context)} MessageModel objects to dictionaries")
+            except Exception as e:
+                print(f"Error converting context: {e}")
+                raise ValueError(f"Failed to process context: {e}")
+        
         if system and context:
             if isinstance(context, list) and not any(msg.get('role') == 'system' for msg in context if isinstance(msg, dict)):
                 context.insert(0, {"role": "system", "content": system})
+                print(f"Added system message to context list")
         elif system:
             context = [{"role": "system", "content": system}]
+            print(f"Created new context with system message")
         
         # Run the evaluation
+        print(f"Starting evaluation_moral_stories_with_openai...")
         result = evaluate_moral_stories_with_openai(
             model_name=model,
             num_examples=examples,
@@ -196,20 +257,29 @@ def run_evaluation(
             message_id=message_id
         )
         
+        print(f"Evaluation completed successfully")
+        
         # Store and return the result
         evaluation_results[task_id] = {
             "status": "completed",
-            "result": result
+            "result": result,
+            "params": evaluation_results[task_id].get("params", {}),
+            "completion_time": str(datetime.now())
         }
+        print(f"=== Evaluation Complete (Task ID: {task_id}) ===")
     except Exception as e:
         error_trace = traceback.format_exc()
+        print(f"Error in evaluation: {str(e)}")
+        print(error_trace)
         evaluation_results[task_id] = {
             "status": "error",
             "message": str(e),
-            "traceback": error_trace
+            "traceback": error_trace,
+            "params": evaluation_results[task_id].get("params", {}),
+            "error_time": str(datetime.now())
         }
         print(f"Error in task {task_id}: {e}")
-        print(error_trace)
+        print(f"=== Evaluation Failed (Task ID: {task_id}) ===")
 
 if __name__ == "__main__":
     import uvicorn
