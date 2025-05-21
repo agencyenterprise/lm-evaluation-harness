@@ -431,7 +431,7 @@ def run_evaluation(
             # Remove from memory now that it's completed and saved to DB
             print(f"Task {task_id} completed and saved to DB. Removing from memory.")
             # Add a small delay to ensure any current API requests can access the result
-            time.sleep(0.5)
+            time.sleep(1.5)
             
             # Only remove if it's still there and hasn't been removed by another process
             if task_id in evaluation_results:
