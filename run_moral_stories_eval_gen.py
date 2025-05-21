@@ -320,7 +320,42 @@ def load_moral_stories_force_redownload(cache_dir=None):
         print(f"Error loading dataset with force_redownload: {e}")
         sys.exit(1)
 
-def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, context: Optional[Union[str, List, Dict]] = None, cache_dir=None, db=None, message_id=None):
+def load_moral_stories_local():
+    """Load the moral_stories dataset from local files instead of downloading.
+    
+    This requires running download_dataset.py once first to create the local files.
+    """
+    from datasets import Dataset, DatasetDict
+    import json
+    import pandas as pd
+    
+    print("Loading moral_stories dataset from local files...")
+    start_time = time.time()
+    
+    try:
+        # Check if the local files exist
+        local_path = os.path.join(os.path.dirname(__file__), "data", "moral_stories_train.json")
+        if not os.path.exists(local_path):
+            print(f"Local dataset file not found at {local_path}")
+            print("Please run download_dataset.py first to create the local files")
+            sys.exit(1)
+        
+        # Load the dataset from local JSON files
+        train_df = pd.read_json(local_path, lines=True)
+        train_dataset = Dataset.from_pandas(train_df)
+        
+        # Create a DatasetDict with just the train split (which is all we need)
+        dataset = DatasetDict({"train": train_dataset})
+        
+        elapsed = time.time() - start_time
+        print(f"Dataset loaded from local files in {elapsed:.2f} seconds!")
+        return dataset
+    except Exception as e:
+        print(f"Error loading dataset from local files: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
+        sys.exit(1)
+
+def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, context: Optional[Union[str, List, Dict]] = None, cache_dir=None, db=None, message_id=None, use_local_dataset=True):
     """Evaluate moral stories using OpenAI chat models.
     
     Args:
@@ -330,6 +365,7 @@ def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, c
         cache_dir: Directory to use for downloading and caching the dataset
         db: Optional MongoDB connection for storing results
         message_id: Optional message ID to associate with evaluation
+        use_local_dataset: Whether to use the local dataset files instead of downloading
     """
     # Check if baseline already exists in DB
     if db is not None and not context:  # This is a baseline evaluation
@@ -338,8 +374,15 @@ def evaluate_moral_stories_with_openai(model_name: str, num_examples: int = 5, c
             print(f"Using existing baseline evaluation for {model_name} from database")
             return existing_result
     
-    # Load dataset with force redownload to bypass local cache issues
-    dataset = load_moral_stories_force_redownload(cache_dir)
+    # Load dataset from local files or by downloading
+    if use_local_dataset:
+        try:
+            dataset = load_moral_stories_local()
+        except Exception as e:
+            print(f"Failed to load from local files: {e}. Falling back to download.")
+            dataset = load_moral_stories_force_redownload(cache_dir)
+    else:
+        dataset = load_moral_stories_force_redownload(cache_dir)
     
     # Parse the context
     parsed_context = parse_conversation_context(context)
@@ -545,6 +588,11 @@ def main():
         default=None, 
         help="Optional message ID to associate with this evaluation (for tracking in frontend)"
     )
+    parser.add_argument(
+        "--use_local_dataset",
+        action="store_true",
+        help="Use local dataset files instead of downloading"
+    )
     args = parser.parse_args()
 
     # Get context from file if specified
@@ -596,7 +644,8 @@ def main():
         context=context,
         cache_dir=args.cache_dir,
         db=db,
-        message_id=args.message_id
+        message_id=args.message_id,
+        use_local_dataset=args.use_local_dataset
     )
 
 if __name__ == "__main__":

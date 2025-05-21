@@ -1,0 +1,16 @@
+{
+  "train_size": 12000,
+  "validation_size": 0,
+  "test_size": 0,
+  "features": [
+    "ID",
+    "norm",
+    "situation",
+    "intention",
+    "moral_action",
+    "moral_consequence",
+    "immoral_action",
+    "immoral_consequence",
+    "label"
+  ]
+}

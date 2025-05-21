@@ -48,6 +48,7 @@ class EvaluationRequest(BaseModel):
     message_id: Optional[str] = None
     force_download: bool = False
     skip_db: bool = False
+    use_local_dataset: bool = True
 
 class EvaluationResponse(BaseModel):
     task_id: str
@@ -118,6 +119,7 @@ async def evaluate(request: EvaluationRequest, background_tasks: BackgroundTasks
     print(f"System: {request.system}")
     print(f"Message ID: {request.message_id}")
     print(f"Skip DB: {request.skip_db}")
+    print(f"Use Local Dataset: {request.use_local_dataset}")
     print("=" * 50)
     
     # Check if system prompt is empty
@@ -136,7 +138,8 @@ async def evaluate(request: EvaluationRequest, background_tasks: BackgroundTasks
         system=system,
         message_id=request.message_id,
         force_download=request.force_download,
-        skip_db=request.skip_db
+        skip_db=request.skip_db,
+        use_local_dataset=request.use_local_dataset
     )
     
     return EvaluationResponse(
@@ -220,7 +223,8 @@ def run_evaluation(
     system: Optional[str],
     message_id: Optional[str],
     force_download: bool,
-    skip_db: bool
+    skip_db: bool,
+    use_local_dataset: bool = True
 ):
     # Set initial status and store input parameters
     evaluation_results[task_id] = {
@@ -234,6 +238,7 @@ def run_evaluation(
             "system": system,
             "message_id": message_id,
             "skip_db": skip_db,
+            "use_local_dataset": use_local_dataset,
             "start_time": str(datetime.now())
         }
     }
@@ -241,7 +246,9 @@ def run_evaluation(
     print(f"\n=== Starting Evaluation (Task ID: {task_id}) ===")
     print(f"Model: {model}")
     print(f"Examples: {examples}")
-    print(f"Using cache_dir: /tmp/hf_cache_moral_stories")
+    print(f"Using local dataset: {use_local_dataset}")
+    if not use_local_dataset:
+        print(f"Using cache_dir: /tmp/hf_cache_moral_stories")
     
     try:
         # Connect to DB if not skipping
@@ -309,7 +316,8 @@ def run_evaluation(
             context=context,
             cache_dir="/tmp/hf_cache_moral_stories",
             db=db,
-            message_id=message_id
+            message_id=message_id,
+            use_local_dataset=use_local_dataset
         )
         
         print(f"Evaluation completed successfully")
