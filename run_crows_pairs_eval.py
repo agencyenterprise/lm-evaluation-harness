@@ -179,6 +179,8 @@ def main():
                        help="Number of examples to evaluate")
     parser.add_argument("--context", type=str, default=None, 
                        help="Prior context (optional)")
+    parser.add_argument("--skip-db", action="store_true", 
+                       help="Skip database saving")
     
     args = parser.parse_args()
     
@@ -189,11 +191,22 @@ def main():
         except json.JSONDecodeError:
             context = args.context
     
+    # Establish database connection unless skipped
+    db = None
+    if not args.skip_db:
+        try:
+            db = get_mongodb_connection()
+            print("✓ Connected to MongoDB")
+        except Exception as e:
+            print(f"⚠️ Failed to connect to MongoDB: {e}")
+            print("Proceeding without database saving...")
+    
     evaluate_crows_pairs(
         model_name=args.model,
         num_examples=args.examples,
         context=context,
-        provider=args.provider
+        provider=args.provider,
+        db=db
     )
 
 if __name__ == "__main__":

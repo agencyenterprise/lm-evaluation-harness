@@ -205,8 +205,7 @@ def create_anthropic_chat_completion(
     payload = {
         "model": model,
         "messages": converted_messages,
-        "system": system_content,
-        "max_tokens": 100,
+        "system": system_content
     }
     
     response = requests.post(
