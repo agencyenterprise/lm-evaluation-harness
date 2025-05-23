@@ -66,14 +66,22 @@ class CrowsPairsRequest(BaseModel):
     model: str
     examples: int = 5
     context: Optional[Union[List[MessageModel], str]] = None
+    system: Optional[str] = None
     message_id: Optional[str] = None
+    force_download: bool = False
+    skip_db: bool = False
+    use_local_dataset: bool = True
     provider: str = "openai"  # 'openai' or 'anthropic'
 
 class TruthfulQARequest(BaseModel):
     model: str
     examples: int = 5
     context: Optional[Union[List[MessageModel], str]] = None
+    system: Optional[str] = None
     message_id: Optional[str] = None
+    force_download: bool = False
+    skip_db: bool = False
+    use_local_dataset: bool = True
     provider: str = "openai"  # 'openai' or 'anthropic'
 
 # Store for background tasks
@@ -201,10 +209,18 @@ async def evaluate_crows_pairs_endpoint(request: CrowsPairsRequest, background_t
     print(f"Model: {request.model}")
     print(f"Provider: {request.provider}")
     print(f"Examples: {request.examples}")
-    print(f"Context Type: {type(request.context)}")
-    print(f"Context: {request.context}")
+    print(f"System: {request.system}")
     print(f"Message ID: {request.message_id}")
+    print(f"Force Download: {request.force_download}")
+    print(f"Skip DB: {request.skip_db}")
+    print(f"Use Local Dataset: {request.use_local_dataset}")
     print("=" * 50)
+    
+    # Check if system prompt is empty
+    system = request.system
+    if system is not None and not system.strip():
+        print("Empty system prompt received, treating as None")
+        system = None
     
     # Set the evaluation task to run in the background
     background_tasks.add_task(
@@ -213,7 +229,11 @@ async def evaluate_crows_pairs_endpoint(request: CrowsPairsRequest, background_t
         model=request.model,
         examples=request.examples,
         context=request.context,
+        system=system,
         message_id=request.message_id,
+        force_download=request.force_download,
+        skip_db=request.skip_db,
+        use_local_dataset=request.use_local_dataset,
         provider=request.provider
     )
     
@@ -240,8 +260,17 @@ async def evaluate_truthfulqa_endpoint(request: TruthfulQARequest, background_ta
     print(f"Examples: {request.examples}")
     print(f"Context Type: {type(request.context)}")
     print(f"Context: {request.context}")
+    print(f"System: {request.system}")
     print(f"Message ID: {request.message_id}")
+    print(f"Skip DB: {request.skip_db}")
+    print(f"Use Local Dataset: {request.use_local_dataset}")
     print("=" * 50)
+    
+    # Check if system prompt is empty
+    system = request.system
+    if system is not None and not system.strip():
+        print("Empty system prompt received, treating as None")
+        system = None
     
     # Set the evaluation task to run in the background
     background_tasks.add_task(
@@ -250,7 +279,11 @@ async def evaluate_truthfulqa_endpoint(request: TruthfulQARequest, background_ta
         model=request.model,
         examples=request.examples,
         context=request.context,
+        system=system,
         message_id=request.message_id,
+        force_download=request.force_download,
+        skip_db=request.skip_db,
+        use_local_dataset=request.use_local_dataset,
         provider=request.provider
     )
     
@@ -608,7 +641,11 @@ def run_crows_pairs_evaluation(
     model: str,
     examples: int,
     context: Optional[Union[List[Dict[str, str]], str]],
+    system: Optional[str],
     message_id: Optional[str],
+    force_download: bool,
+    skip_db: bool,
+    use_local_dataset: bool = True,
     provider: str = "openai"
 ):
     # Set initial status and store input parameters
@@ -627,7 +664,10 @@ def run_crows_pairs_evaluation(
             "examples": examples,
             "context_type": type(context).__name__,
             "context_sample": str(context)[:100] + "..." if context and len(str(context)) > 100 else str(context),
+            "system": system,
             "message_id": message_id,
+            "skip_db": skip_db,
+            "use_local_dataset": use_local_dataset,
             "start_time": str(datetime.now())
         }
     }
@@ -636,15 +676,61 @@ def run_crows_pairs_evaluation(
     print(f"Model: {model}")
     print(f"Provider: {provider}")
     print(f"Examples: {examples}")
+    print(f"System: {system}")
+    print(f"Message ID: {message_id}")
+    print(f"Force Download: {force_download}")
+    print(f"Skip DB: {skip_db}")
+    print(f"Use Local Dataset: {use_local_dataset}")
     
     try:
-        # Get database connection
-        try:
-            db = get_db_connection()
-            print("Database connection established for CrowS-Pairs evaluation")
-        except Exception as e:
-            print(f"Warning: Could not connect to database: {e}")
-            db = None
+        # Connect to DB if not skipping
+        db = None
+        if not skip_db:
+            try:
+                print(f"Connecting to MongoDB...")
+                db = get_db_connection()
+                print(f"MongoDB connection successful")
+            except Exception as e:
+                print(f"MongoDB connection error: {str(e)}")
+                evaluation_results[task_id] = {
+                    "status": "error",
+                    "message": f"MongoDB connection error: {str(e)}"
+                }
+                return
+        else:
+            print(f"Skipping MongoDB connection (skip_db=True)")
+        
+        # Process context and system prompt
+        print(f"Processing context and system prompt...")
+        
+        # Convert MessageModel objects to dictionaries if needed
+        if isinstance(context, list):
+            try:
+                # Check if we have MessageModel objects and convert them to dicts
+                converted_context = []
+                for msg in context:
+                    if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                        # This is likely a MessageModel - convert to dict
+                        converted_context.append({
+                            'role': msg.role,
+                            'content': msg.content
+                        })
+                    elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                        # Already a proper dict
+                        converted_context.append(msg)
+                    else:
+                        raise ValueError(f"Invalid message format: {msg}")
+                
+                context = converted_context
+                print(f"Converted {len(converted_context)} MessageModel objects to dictionaries")
+            except Exception as e:
+                print(f"Error converting context: {e}")
+                raise ValueError(f"Failed to process context: {e}")
+        
+        # Check if system prompt is empty and treat as None
+        if system is not None and not system.strip():
+            print("System prompt is empty, treating as None")
+            system = None
         
         # Update task status
         evaluation_results[task_id]["status"] = "running"
@@ -659,10 +745,11 @@ def run_crows_pairs_evaluation(
             model_name=model,
             num_examples=examples,
             context=context,
+            system=system,
             provider=provider,
             progress_callback=progress_callback,
-            db=db,  # Pass database connection
-            message_id=message_id  # Use task_id as message_id
+            db=db,
+            message_id=message_id
         )
         
         print(f"CrowS-Pairs evaluation completed successfully")
@@ -719,7 +806,11 @@ def run_truthfulqa_evaluation(
     model: str,
     examples: int,
     context: Optional[Union[List[Dict[str, str]], str]],
+    system: Optional[str],
     message_id: Optional[str],
+    force_download: bool,
+    skip_db: bool,
+    use_local_dataset: bool = True,
     provider: str = "openai"
 ):
     # Set initial status and store input parameters
@@ -738,7 +829,11 @@ def run_truthfulqa_evaluation(
             "examples": examples,
             "context_type": type(context).__name__,
             "context_sample": str(context)[:100] + "..." if context and len(str(context)) > 100 else str(context),
+            "system": system,
             "message_id": message_id,
+            "force_download": force_download,
+            "skip_db": skip_db,
+            "use_local_dataset": use_local_dataset,
             "start_time": str(datetime.now())
         }
     }
@@ -747,15 +842,61 @@ def run_truthfulqa_evaluation(
     print(f"Model: {model}")
     print(f"Provider: {provider}")
     print(f"Examples: {examples}")
+    print(f"System: {system}")
+    print(f"Message ID: {message_id}")
+    print(f"Force Download: {force_download}")
+    print(f"Skip DB: {skip_db}")
+    print(f"Use Local Dataset: {use_local_dataset}")
     
     try:
-        # Get database connection
-        try:
-            db = get_db_connection()
-            print("Database connection established for TruthfulQA evaluation")
-        except Exception as e:
-            print(f"Warning: Could not connect to database: {e}")
-            db = None
+        # Connect to DB if not skipping
+        db = None
+        if not skip_db:
+            try:
+                print(f"Connecting to MongoDB...")
+                db = get_db_connection()
+                print(f"MongoDB connection successful")
+            except Exception as e:
+                print(f"MongoDB connection error: {str(e)}")
+                evaluation_results[task_id] = {
+                    "status": "error",
+                    "message": f"MongoDB connection error: {str(e)}"
+                }
+                return
+        else:
+            print(f"Skipping MongoDB connection (skip_db=True)")
+        
+        # Process context and system prompt
+        print(f"Processing context and system prompt...")
+        
+        # Convert MessageModel objects to dictionaries if needed
+        if isinstance(context, list):
+            try:
+                # Check if we have MessageModel objects and convert them to dicts
+                converted_context = []
+                for msg in context:
+                    if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                        # This is likely a MessageModel - convert to dict
+                        converted_context.append({
+                            'role': msg.role,
+                            'content': msg.content
+                        })
+                    elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                        # Already a proper dict
+                        converted_context.append(msg)
+                    else:
+                        raise ValueError(f"Invalid message format: {msg}")
+                
+                context = converted_context
+                print(f"Converted {len(converted_context)} MessageModel objects to dictionaries")
+            except Exception as e:
+                print(f"Error converting context: {e}")
+                raise ValueError(f"Failed to process context: {e}")
+        
+        # Check if system prompt is empty and treat as None
+        if system is not None and not system.strip():
+            print("System prompt is empty, treating as None")
+            system = None
         
         # Update task status
         evaluation_results[task_id]["status"] = "running"
@@ -770,10 +911,11 @@ def run_truthfulqa_evaluation(
             model_name=model,
             num_examples=examples,
             context=context,
+            system=system,
             provider=provider,
             progress_callback=progress_callback,
-            db=db,  # Pass database connection
-            message_id=message_id  # Use task_id as message_id
+            db=db,
+            message_id=message_id
         )
         
         print(f"TruthfulQA evaluation completed successfully")

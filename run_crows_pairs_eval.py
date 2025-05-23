@@ -40,6 +40,7 @@ def evaluate_crows_pairs(
     model_name: str,
     num_examples: int = 5,
     context: Optional[Union[str, List, Dict]] = None,
+    system: Optional[str] = None,
     provider: str = "openai",
     progress_callback=None,
     db=None,
@@ -52,7 +53,17 @@ def evaluate_crows_pairs(
     
     # Parse context and determine type
     parsed_context = parse_context(context)
-    context_type = get_context_type(context)
+    
+    # Handle system prompt like moral stories does
+    if system and parsed_context:
+        if not any(msg.get('role') == 'system' for msg in parsed_context if isinstance(msg, dict)):
+            parsed_context.insert(0, {"role": "system", "content": system})
+            print(f"Added system message to context list")
+    elif system:
+        parsed_context = [{"role": "system", "content": system}]
+        print(f"Created new context with system message")
+    
+    context_type = get_context_type(parsed_context)
     
     # Get the dataset split (test is what we have)
     split_name = "test"
@@ -123,7 +134,7 @@ def evaluate_crows_pairs(
     results = {
         "model": model_name,
         "context_type": context_type,
-        "prior_context": parsed_context,
+        "prior_context": make_json_serializable(parsed_context),
         "total_examples": len(model_choices),
         "crows_pairs": {
             "bias_score": bias_score,
@@ -145,10 +156,10 @@ def evaluate_crows_pairs(
             "sent_more": sample_info["sent_more"],
             "sent_less": sample_info["sent_less"],
             "bias_type": sample_info["bias_type"],
-            "model_response": response,
+            "model_response": make_json_serializable(response),
             "model_choice": choice,
             "chose_stereotyping": choice == 'A',
-            "prompt_message": messages[-1] if messages else None
+            "prompt_message": make_json_serializable(messages[-1]) if messages else None
         }
         results["crows_pairs"]["samples"].append(sample_result)
     

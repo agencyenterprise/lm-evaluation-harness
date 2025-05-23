@@ -274,7 +274,20 @@ def print_evaluation_results(dataset_name: str, model_name: str, context_type: s
 
 # Helper function to make data JSON serializable
 def make_json_serializable(obj):
-    if isinstance(obj, (np.integer, np.int64, np.int32)):
+    # Handle pydantic models and MessageModel objects
+    if hasattr(obj, 'model_dump'):
+        # Pydantic v2 models
+        return make_json_serializable(obj.model_dump())
+    elif hasattr(obj, 'dict'):
+        # Pydantic v1 models
+        return make_json_serializable(obj.dict())
+    elif hasattr(obj, '__class__') and obj.__class__.__name__ == 'MessageModel':
+        # Specific handling for MessageModel objects
+        if hasattr(obj, 'role') and hasattr(obj, 'content'):
+            return {"role": str(obj.role), "content": str(obj.content)}
+        else:
+            return make_json_serializable(obj.__dict__)
+    elif isinstance(obj, (np.integer, np.int64, np.int32)):
         return int(obj)
     elif isinstance(obj, (np.floating, np.float64, np.float32)):
         return float(obj)

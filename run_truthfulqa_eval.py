@@ -42,6 +42,7 @@ def evaluate_truthfulqa(
     model_name: str,
     num_examples: int = 5,
     context: Optional[Union[str, List, Dict]] = None,
+    system: Optional[str] = None,
     provider: str = "openai",
     progress_callback=None,
     db=None,
@@ -54,7 +55,17 @@ def evaluate_truthfulqa(
     
     # Parse context and determine type
     parsed_context = parse_context(context)
-    context_type = get_context_type(context)
+    
+    # Handle system prompt like moral stories does
+    if system and parsed_context:
+        if not any(msg.get('role') == 'system' for msg in parsed_context if isinstance(msg, dict)):
+            parsed_context.insert(0, {"role": "system", "content": system})
+            print(f"Added system message to context list")
+    elif system:
+        parsed_context = [{"role": "system", "content": system}]
+        print(f"Created new context with system message")
+    
+    context_type = get_context_type(parsed_context)
     
     # Get the dataset split (prefer validation, fallback to train)
     split_name = "validation" if "validation" in dataset else "train"
@@ -146,7 +157,7 @@ def evaluate_truthfulqa(
     results = {
         "model": model_name,
         "context_type": context_type,
-        "prior_context": parsed_context,
+        "prior_context": make_json_serializable(parsed_context),
         "total_examples": len(model_choices),
         "truthfulqa": {
             "accuracy": accuracy,
@@ -172,10 +183,10 @@ def evaluate_truthfulqa(
             "choices": sample_info["choices"],
             "correct_answer": sample_info["correct_answer"],
             "correct_choice": chr(65 + sample_info['correct_answer_idx']),
-            "model_response": response,
+            "model_response": make_json_serializable(response),
             "model_choice": choice,
             "is_correct": is_correct,
-            "prompt_message": messages[-1] if messages else None
+            "prompt_message": make_json_serializable(messages[-1]) if messages else None
         }
         results["truthfulqa"]["samples"].append(sample_result)
     
