@@ -9,12 +9,14 @@ import traceback
 from dotenv import load_dotenv
 from datetime import datetime
 import time
+import threading
 
 # Import the evaluation functions
 try:
     from run_moral_stories_eval_gen import evaluate_moral_stories_with_openai, get_mongodb_connection
     from run_crows_pairs_eval import evaluate_crows_pairs
     from run_truthfulqa_eval import evaluate_truthfulqa
+    from eval_utils import get_mongodb_connection as get_db_connection, make_json_serializable
 except ImportError as e:
     print(f"Failed to import evaluation functions: {e}")
     traceback.print_exc()
@@ -111,7 +113,7 @@ async def health():
     mongo_status = "Not checked"
     if os.environ.get("MONGODB_URI"):
         try:
-            db = get_mongodb_connection()
+            db = get_db_connection()
             mongo_status = "Connected" if db else "Failed to connect"
         except Exception as e:
             mongo_status = f"Error: {str(e)}"
@@ -290,22 +292,36 @@ async def get_result(task_id: str):
         # Only try to check DB if task_id might be a message_id
         if not task_id.startswith("task_") and len(task_id) > 10:
             print(f"Task {task_id} not found in memory, checking MongoDB...")
-            db = get_mongodb_connection()
+            db = get_db_connection()
             
-            # Check both collections
-            for collection_name in ["baseline_results", "with_context_results"]:
-                collection = db[collection_name]
-                stored_result = collection.find_one({"message_id": task_id})
-                
-                if stored_result:
-                    print(f"Found result for task {task_id} in MongoDB ({collection_name})")
-                    # Make the stored result compatible with the API format
-                    return {
-                        "status": "completed",
-                        "result": stored_result,
-                        "retrieved_from": "database",
-                        "collection": collection_name
-                    }
+            # Check all result collections
+            collection_names = [
+                "baseline_results", 
+                "with_context_results",
+                "crows_pairs_baseline_results",
+                "crows_pairs_with_context_results", 
+                "truthfulqa_baseline_results",
+                "truthfulqa_with_context_results"
+            ]
+            
+            for collection_name in collection_names:
+                try:
+                    collection = db[collection_name]
+                    stored_result = collection.find_one({"message_id": task_id})
+                    
+                    if stored_result:
+                        print(f"Found result for task {task_id} in MongoDB ({collection_name})")
+                        # Make the stored result compatible with the API format and JSON serializable
+                        serializable_result = make_json_serializable(stored_result)
+                        return {
+                            "status": "completed",
+                            "result": serializable_result,
+                            "retrieved_from": "database",
+                            "collection": collection_name
+                        }
+                except Exception as e:
+                    print(f"Error checking collection {collection_name}: {e}")
+                    continue
             
             # If we reach here, the result was not found in the database
             print(f"Result for task {task_id} not found in MongoDB")
@@ -441,7 +457,7 @@ def run_evaluation(
         if not skip_db:
             try:
                 print(f"Connecting to MongoDB...")
-                db = get_mongodb_connection()
+                db = get_db_connection()
                 print(f"MongoDB connection successful")
             except Exception as e:
                 print(f"MongoDB connection error: {str(e)}")
@@ -622,42 +638,31 @@ def run_crows_pairs_evaluation(
     print(f"Examples: {examples}")
     
     try:
-        # Process context
-        print(f"Processing context...")
+        # Get database connection
+        try:
+            db = get_db_connection()
+            print("Database connection established for CrowS-Pairs evaluation")
+        except Exception as e:
+            print(f"Warning: Could not connect to database: {e}")
+            db = None
         
-        # Convert MessageModel objects to dictionaries if needed
-        if isinstance(context, list):
-            try:
-                converted_context = []
-                for msg in context:
-                    if hasattr(msg, 'role') and hasattr(msg, 'content'):
-                        converted_context.append({
-                            'role': msg.role,
-                            'content': msg.content
-                        })
-                    elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
-                        converted_context.append(msg)
-                    else:
-                        raise ValueError(f"Invalid message format: {msg}")
-                
-                context = converted_context
-                print(f"Converted {len(converted_context)} MessageModel objects to dictionaries")
-            except Exception as e:
-                print(f"Error converting context: {e}")
-                raise ValueError(f"Failed to process context: {e}")
+        # Update task status
+        evaluation_results[task_id]["status"] = "running"
+        evaluation_results[task_id]["progress"] = {"current": 0, "total": examples}
         
-        # Create a progress callback for this task
         def progress_callback(current, total):
             update_progress(task_id, current, total)
         
-        # Run the evaluation
+        # Run evaluation with database connection
         print(f"Starting CrowS-Pairs evaluation...")
         result = evaluate_crows_pairs(
             model_name=model,
             num_examples=examples,
             context=context,
             provider=provider,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            db=db,  # Pass database connection
+            message_id=message_id  # Use task_id as message_id
         )
         
         print(f"CrowS-Pairs evaluation completed successfully")
@@ -744,42 +749,31 @@ def run_truthfulqa_evaluation(
     print(f"Examples: {examples}")
     
     try:
-        # Process context
-        print(f"Processing context...")
+        # Get database connection
+        try:
+            db = get_db_connection()
+            print("Database connection established for TruthfulQA evaluation")
+        except Exception as e:
+            print(f"Warning: Could not connect to database: {e}")
+            db = None
         
-        # Convert MessageModel objects to dictionaries if needed
-        if isinstance(context, list):
-            try:
-                converted_context = []
-                for msg in context:
-                    if hasattr(msg, 'role') and hasattr(msg, 'content'):
-                        converted_context.append({
-                            'role': msg.role,
-                            'content': msg.content
-                        })
-                    elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
-                        converted_context.append(msg)
-                    else:
-                        raise ValueError(f"Invalid message format: {msg}")
-                
-                context = converted_context
-                print(f"Converted {len(converted_context)} MessageModel objects to dictionaries")
-            except Exception as e:
-                print(f"Error converting context: {e}")
-                raise ValueError(f"Failed to process context: {e}")
+        # Update task status
+        evaluation_results[task_id]["status"] = "running"
+        evaluation_results[task_id]["progress"] = {"current": 0, "total": examples}
         
-        # Create a progress callback for this task
         def progress_callback(current, total):
             update_progress(task_id, current, total)
         
-        # Run the evaluation
+        # Run evaluation with database connection
         print(f"Starting TruthfulQA evaluation...")
         result = evaluate_truthfulqa(
             model_name=model,
             num_examples=examples,
             context=context,
             provider=provider,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            db=db,  # Pass database connection
+            message_id=message_id  # Use task_id as message_id
         )
         
         print(f"TruthfulQA evaluation completed successfully")

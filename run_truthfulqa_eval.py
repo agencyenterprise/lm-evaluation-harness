@@ -13,7 +13,8 @@ from typing import List, Dict, Optional, Union
 from eval_utils import (
     get_api_key, create_chat_completion, load_dataset_local, 
     parse_context, get_context_type, create_deterministic_sample,
-    safe_extract_choice, print_evaluation_header, print_evaluation_results
+    safe_extract_choice, print_evaluation_header, print_evaluation_results,
+    get_mongodb_connection, save_results_to_db, make_json_serializable
 )
 
 def load_truthfulqa_local():
@@ -42,7 +43,9 @@ def evaluate_truthfulqa(
     num_examples: int = 5,
     context: Optional[Union[str, List, Dict]] = None,
     provider: str = "openai",
-    progress_callback=None
+    progress_callback=None,
+    db=None,
+    message_id: Optional[str] = None
 ):
     """Evaluate TruthfulQA using chat models."""
     
@@ -143,6 +146,7 @@ def evaluate_truthfulqa(
     results = {
         "model": model_name,
         "context_type": context_type,
+        "prior_context": parsed_context,
         "total_examples": len(model_choices),
         "truthfulqa": {
             "accuracy": accuracy,
@@ -153,6 +157,10 @@ def evaluate_truthfulqa(
             "samples": []
         }
     }
+    
+    # Add message ID if provided
+    if message_id:
+        results["message_id"] = message_id
     
     # Add samples to results
     for i, (messages, response, choice, sample_info) in enumerate(zip(all_messages, responses, model_choices, sample_data)):
@@ -178,6 +186,13 @@ def evaluate_truthfulqa(
         "valid_responses": f"{total_valid}/{len(model_choices)}"
     }
     print_evaluation_results("TruthfulQA", model_name, context_type, metrics)
+    
+    # Save to MongoDB if available
+    if db is not None:
+        save_results_to_db(db, results, "truthfulqa")
+        print("TruthfulQA results saved to database")
+    else:
+        print("No database connection provided, results not saved")
     
     return results
 

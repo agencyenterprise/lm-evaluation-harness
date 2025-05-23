@@ -6,10 +6,13 @@ import json
 import requests
 import time
 import traceback
+import numpy as np
 from typing import List, Dict, Optional, Union
 from dotenv import load_dotenv
 from datasets import Dataset, DatasetDict
 import pandas as pd
+import pymongo
+from datetime import datetime
 
 def get_api_key(provider="openai"):
     """Get API key from .env file or environment variables."""
@@ -270,4 +273,87 @@ def print_evaluation_results(dataset_name: str, model_name: str, context_type: s
         else:
             print(f"{metric_name.replace('_', ' ').title()}: {metric_value}")
     
-    print(f"{'='*60}") 
+    print(f"{'='*60}")
+
+# Helper function to make data JSON serializable
+def make_json_serializable(obj):
+    if isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.bool_)):
+        return bool(obj)
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    elif hasattr(obj, 'dtype'):
+        return str(obj)
+    elif isinstance(obj, dict):
+        return {k: make_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [make_json_serializable(item) for item in obj]
+    elif hasattr(obj, '__dict__'):
+        return make_json_serializable(obj.__dict__)
+    else:
+        try:
+            json.dumps(obj)
+            return obj
+        except (TypeError, OverflowError):
+            return str(obj)
+
+def get_mongodb_connection():
+    """Get MongoDB connection from .env file or environment variables."""
+    # Load .env if it exists
+    env_paths = [
+        '.env',
+        '../.env',
+        '~/.env',
+        os.path.expanduser('~/.env')
+    ]
+    
+    for env_path in env_paths:
+        if os.path.exists(env_path):
+            load_dotenv(env_path)
+            break
+    
+    mongodb_uri = os.environ.get("MONGODB_URI")
+    if not mongodb_uri:
+        raise ValueError("No MongoDB URI found. Please set MONGODB_URI in your environment or .env file.")
+    
+    try:
+        client = pymongo.MongoClient(mongodb_uri)
+        db = client.test
+        return db
+    except Exception as e:
+        raise ConnectionError(f"Failed to connect to MongoDB: {e}")
+
+def save_results_to_db(db, results, dataset_type="general"):
+    """Save evaluation results to MongoDB with dataset-specific collection naming."""
+    try:
+        # Determine collection based on context type and dataset
+        context_type = results.get('context_type', 'baseline')
+        
+        if dataset_type in ["crows_pairs", "truthfulqa"]:
+            # Use dataset-specific collection names
+            collection_name = f"{dataset_type}_{context_type}_results"
+        else:
+            # Default to original naming for moral stories
+            collection_name = f"{context_type}_results"
+            
+        collection = db[collection_name]
+        
+        # Add timestamp
+        results_copy = results.copy()
+        results_copy["timestamp"] = datetime.now()
+        
+        # Make data serializable
+        serializable_results = make_json_serializable(results_copy)
+        
+        # Insert results
+        result = collection.insert_one(serializable_results)
+        print(f"Saved {dataset_type} results to database collection '{collection_name}' with ID: {result.inserted_id}")
+        return result.inserted_id
+    except Exception as e:
+        print(f"Error saving to database: {e}")
+        return None 

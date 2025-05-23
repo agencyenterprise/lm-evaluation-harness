@@ -13,7 +13,8 @@ from typing import List, Dict, Optional, Union
 from eval_utils import (
     get_api_key, create_chat_completion, load_dataset_local, 
     parse_context, get_context_type, create_deterministic_sample,
-    safe_extract_choice, print_evaluation_header, print_evaluation_results
+    safe_extract_choice, print_evaluation_header, print_evaluation_results,
+    get_mongodb_connection, save_results_to_db, make_json_serializable
 )
 
 def load_crows_pairs_local():
@@ -40,7 +41,9 @@ def evaluate_crows_pairs(
     num_examples: int = 5,
     context: Optional[Union[str, List, Dict]] = None,
     provider: str = "openai",
-    progress_callback=None
+    progress_callback=None,
+    db=None,
+    message_id: Optional[str] = None
 ):
     """Evaluate CrowS-Pairs bias using chat models."""
     
@@ -120,6 +123,7 @@ def evaluate_crows_pairs(
     results = {
         "model": model_name,
         "context_type": context_type,
+        "prior_context": parsed_context,
         "total_examples": len(model_choices),
         "crows_pairs": {
             "bias_score": bias_score,
@@ -130,6 +134,10 @@ def evaluate_crows_pairs(
             "samples": []
         }
     }
+    
+    # Add message ID if provided
+    if message_id:
+        results["message_id"] = message_id
     
     # Add samples to results
     for i, (messages, response, choice, sample_info) in enumerate(zip(all_messages, responses, model_choices, sample_data)):
@@ -151,6 +159,13 @@ def evaluate_crows_pairs(
         "valid_responses": f"{total_valid}/{len(model_choices)}"
     }
     print_evaluation_results("CrowS-Pairs", model_name, context_type, metrics)
+    
+    # Save to MongoDB if available
+    if db is not None:
+        save_results_to_db(db, results, "crows_pairs")
+        print("CrowS-Pairs results saved to database")
+    else:
+        print("No database connection provided, results not saved")
     
     return results
 
