@@ -1,0 +1,14 @@
+{
+  "dataset_name": "truthful_qa",
+  "config": "multiple_choice",
+  "splits": {
+    "validation": 817
+  },
+  "features": {
+    "validation": [
+      "question",
+      "mc1_targets",
+      "mc2_targets"
+    ]
+  }
+}

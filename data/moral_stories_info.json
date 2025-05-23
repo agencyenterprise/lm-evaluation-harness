@@ -1,16 +1,20 @@
 {
-  "train_size": 12000,
-  "validation_size": 0,
-  "test_size": 0,
-  "features": [
-    "ID",
-    "norm",
-    "situation",
-    "intention",
-    "moral_action",
-    "moral_consequence",
-    "immoral_action",
-    "immoral_consequence",
-    "label"
-  ]
+  "dataset_name": "demelin/moral_stories",
+  "config": "full",
+  "splits": {
+    "train": 12000
+  },
+  "features": {
+    "train": [
+      "ID",
+      "norm",
+      "situation",
+      "intention",
+      "moral_action",
+      "moral_consequence",
+      "immoral_action",
+      "immoral_consequence",
+      "label"
+    ]
+  }
 }

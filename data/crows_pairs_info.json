@@ -1,0 +1,19 @@
+{
+  "dataset_name": "crows_pairs",
+  "config": null,
+  "splits": {
+    "test": 1508
+  },
+  "features": {
+    "test": [
+      "id",
+      "sent_more",
+      "sent_less",
+      "stereo_antistereo",
+      "bias_type",
+      "annotations",
+      "anon_writer",
+      "anon_annotators"
+    ]
+  }
+}

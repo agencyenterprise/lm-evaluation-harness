@@ -10,11 +10,13 @@ from dotenv import load_dotenv
 from datetime import datetime
 import time
 
-# Import the evaluation function
+# Import the evaluation functions
 try:
     from run_moral_stories_eval_gen import evaluate_moral_stories_with_openai, get_mongodb_connection
+    from run_crows_pairs_eval import evaluate_crows_pairs
+    from run_truthfulqa_eval import evaluate_truthfulqa
 except ImportError as e:
-    print(f"Failed to import from run_moral_stories_eval_gen: {e}")
+    print(f"Failed to import evaluation functions: {e}")
     traceback.print_exc()
     sys.exit(1)
 
@@ -22,8 +24,8 @@ except ImportError as e:
 load_dotenv()
 
 app = FastAPI(
-    title="Moral Stories Evaluation API",
-    description="API for evaluating language models on moral reasoning tasks",
+    title="Language Model Evaluation API",
+    description="API for evaluating language models on moral reasoning, bias detection, and truthfulness tasks",
     version="1.0.0"
 )
 
@@ -57,20 +59,42 @@ class EvaluationResponse(BaseModel):
     status: str
     message: str
 
+# Specific request models for different evaluation types
+class CrowsPairsRequest(BaseModel):
+    model: str
+    examples: int = 5
+    context: Optional[Union[List[MessageModel], str]] = None
+    message_id: Optional[str] = None
+    provider: str = "openai"  # 'openai' or 'anthropic'
+
+class TruthfulQARequest(BaseModel):
+    model: str
+    examples: int = 5
+    context: Optional[Union[List[MessageModel], str]] = None
+    message_id: Optional[str] = None
+    provider: str = "openai"  # 'openai' or 'anthropic'
+
 # Store for background tasks
 evaluation_results = {}
 
 @app.get("/")
 async def root():
     return {
-        "message": "Moral Stories Evaluation API is running",
+        "message": "Language Model Evaluation API is running",
         "version": "1.0.0",
         "endpoints": {
             "/": "This info message",
-            "/evaluate": "POST - Start an evaluation",
+            "/evaluate": "POST - Start a moral stories evaluation",
+            "/evaluate/crows-pairs": "POST - Start a CrowS-Pairs bias evaluation",
+            "/evaluate/truthfulqa": "POST - Start a TruthfulQA evaluation",
             "/result/{task_id}": "GET - Get evaluation results (also removes completed tasks)",
             "/tasks": "GET - List all tasks and statuses. Use ?clear_completed=true to clean up",
             "/health": "GET - Check API health"
+        },
+        "available_evaluations": {
+            "moral_stories": "Evaluate moral reasoning and ethical decision making",
+            "crows_pairs": "Evaluate social biases and stereotyping",
+            "truthfulqa": "Evaluate truthfulness and factual accuracy"
         }
     }
 
@@ -158,6 +182,80 @@ async def evaluate(request: EvaluationRequest, background_tasks: BackgroundTasks
         task_id=task_id,
         status="processing",
         message=f"Evaluation started for model {request.model}"
+    )
+
+@app.post("/evaluate/crows-pairs", response_model=EvaluationResponse)
+async def evaluate_crows_pairs_endpoint(request: CrowsPairsRequest, background_tasks: BackgroundTasks):
+    # Use message_id as task_id if provided, otherwise generate one
+    if request.message_id:
+        task_id = request.message_id
+        print(f"Using message_id as task_id: {task_id}")
+    else:
+        task_id = f"crows_pairs_task_{len(evaluation_results) + 1}"
+        print(f"No message_id provided, generated task_id: {task_id}")
+    
+    # Log the parameters received from frontend
+    print(f"\n=== Received CrowS-Pairs Evaluation Request (Task ID: {task_id}) ===")
+    print(f"Model: {request.model}")
+    print(f"Provider: {request.provider}")
+    print(f"Examples: {request.examples}")
+    print(f"Context Type: {type(request.context)}")
+    print(f"Context: {request.context}")
+    print(f"Message ID: {request.message_id}")
+    print("=" * 50)
+    
+    # Set the evaluation task to run in the background
+    background_tasks.add_task(
+        run_crows_pairs_evaluation,
+        task_id=task_id,
+        model=request.model,
+        examples=request.examples,
+        context=request.context,
+        message_id=request.message_id,
+        provider=request.provider
+    )
+    
+    return EvaluationResponse(
+        task_id=task_id,
+        status="processing",
+        message=f"CrowS-Pairs bias evaluation started for model {request.model}"
+    )
+
+@app.post("/evaluate/truthfulqa", response_model=EvaluationResponse)
+async def evaluate_truthfulqa_endpoint(request: TruthfulQARequest, background_tasks: BackgroundTasks):
+    # Use message_id as task_id if provided, otherwise generate one
+    if request.message_id:
+        task_id = request.message_id
+        print(f"Using message_id as task_id: {task_id}")
+    else:
+        task_id = f"truthfulqa_task_{len(evaluation_results) + 1}"
+        print(f"No message_id provided, generated task_id: {task_id}")
+    
+    # Log the parameters received from frontend
+    print(f"\n=== Received TruthfulQA Evaluation Request (Task ID: {task_id}) ===")
+    print(f"Model: {request.model}")
+    print(f"Provider: {request.provider}")
+    print(f"Examples: {request.examples}")
+    print(f"Context Type: {type(request.context)}")
+    print(f"Context: {request.context}")
+    print(f"Message ID: {request.message_id}")
+    print("=" * 50)
+    
+    # Set the evaluation task to run in the background
+    background_tasks.add_task(
+        run_truthfulqa_evaluation,
+        task_id=task_id,
+        model=request.model,
+        examples=request.examples,
+        context=request.context,
+        message_id=request.message_id,
+        provider=request.provider
+    )
+    
+    return EvaluationResponse(
+        task_id=task_id,
+        status="processing",
+        message=f"TruthfulQA evaluation started for model {request.model}"
     )
 
 @app.get("/result/{task_id}")
@@ -488,6 +586,250 @@ def update_progress(task_id, current, total):
         "percent": int((current / total) * 100) if total > 0 else 0
     }
     print(f"Task {task_id}: Progress {current}/{total} ({int((current / total) * 100)}%)")
+
+def run_crows_pairs_evaluation(
+    task_id: str,
+    model: str,
+    examples: int,
+    context: Optional[Union[List[Dict[str, str]], str]],
+    message_id: Optional[str],
+    provider: str = "openai"
+):
+    # Set initial status and store input parameters
+    evaluation_results[task_id] = {
+        "status": "processing",
+        "message": f"Processing CrowS-Pairs evaluation for {model}",
+        "progress": {
+            "current": 0,
+            "total": examples,
+            "percent": 0
+        },
+        "params": {
+            "evaluation_type": "crows_pairs",
+            "model": model,
+            "provider": provider,
+            "examples": examples,
+            "context_type": type(context).__name__,
+            "context_sample": str(context)[:100] + "..." if context and len(str(context)) > 100 else str(context),
+            "message_id": message_id,
+            "start_time": str(datetime.now())
+        }
+    }
+    
+    print(f"\n=== Starting CrowS-Pairs Evaluation (Task ID: {task_id}) ===")
+    print(f"Model: {model}")
+    print(f"Provider: {provider}")
+    print(f"Examples: {examples}")
+    
+    try:
+        # Process context
+        print(f"Processing context...")
+        
+        # Convert MessageModel objects to dictionaries if needed
+        if isinstance(context, list):
+            try:
+                converted_context = []
+                for msg in context:
+                    if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                        converted_context.append({
+                            'role': msg.role,
+                            'content': msg.content
+                        })
+                    elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                        converted_context.append(msg)
+                    else:
+                        raise ValueError(f"Invalid message format: {msg}")
+                
+                context = converted_context
+                print(f"Converted {len(converted_context)} MessageModel objects to dictionaries")
+            except Exception as e:
+                print(f"Error converting context: {e}")
+                raise ValueError(f"Failed to process context: {e}")
+        
+        # Create a progress callback for this task
+        def progress_callback(current, total):
+            update_progress(task_id, current, total)
+        
+        # Run the evaluation
+        print(f"Starting CrowS-Pairs evaluation...")
+        result = evaluate_crows_pairs(
+            model_name=model,
+            num_examples=examples,
+            context=context,
+            provider=provider,
+            progress_callback=progress_callback
+        )
+        
+        print(f"CrowS-Pairs evaluation completed successfully")
+        
+        # Create a temporary copy of result to save in memory
+        temp_result = {
+            "status": "completed",
+            "result": result,
+            "params": evaluation_results[task_id].get("params", {}),
+            "completion_time": str(datetime.now())
+        }
+        
+        # Store result before removing from memory
+        if task_id in evaluation_results:
+            evaluation_results[task_id] = temp_result
+            
+            # Remove from memory now that it's completed
+            print(f"Task {task_id} completed. Removing from memory.")
+            time.sleep(1.5)
+            
+            if task_id in evaluation_results:
+                evaluation_results.pop(task_id)
+                print(f"Removed task {task_id} from memory.")
+            
+        print(f"=== CrowS-Pairs Evaluation Complete (Task ID: {task_id}) ===")
+        return temp_result
+        
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        print(f"Error in CrowS-Pairs evaluation: {str(e)}")
+        print(error_trace)
+        
+        error_result = {
+            "status": "error",
+            "message": str(e),
+            "traceback": error_trace,
+            "params": evaluation_results[task_id].get("params", {}),
+            "error_time": str(datetime.now())
+        }
+        
+        if task_id in evaluation_results:
+            evaluation_results[task_id] = error_result
+            time.sleep(0.5)
+            
+            if task_id in evaluation_results:
+                evaluation_results.pop(task_id)
+                print(f"Removed errored task {task_id} from memory.")
+                
+        print(f"=== CrowS-Pairs Evaluation Failed (Task ID: {task_id}) ===")
+        return error_result
+
+def run_truthfulqa_evaluation(
+    task_id: str,
+    model: str,
+    examples: int,
+    context: Optional[Union[List[Dict[str, str]], str]],
+    message_id: Optional[str],
+    provider: str = "openai"
+):
+    # Set initial status and store input parameters
+    evaluation_results[task_id] = {
+        "status": "processing",
+        "message": f"Processing TruthfulQA evaluation for {model}",
+        "progress": {
+            "current": 0,
+            "total": examples,
+            "percent": 0
+        },
+        "params": {
+            "evaluation_type": "truthfulqa",
+            "model": model,
+            "provider": provider,
+            "examples": examples,
+            "context_type": type(context).__name__,
+            "context_sample": str(context)[:100] + "..." if context and len(str(context)) > 100 else str(context),
+            "message_id": message_id,
+            "start_time": str(datetime.now())
+        }
+    }
+    
+    print(f"\n=== Starting TruthfulQA Evaluation (Task ID: {task_id}) ===")
+    print(f"Model: {model}")
+    print(f"Provider: {provider}")
+    print(f"Examples: {examples}")
+    
+    try:
+        # Process context
+        print(f"Processing context...")
+        
+        # Convert MessageModel objects to dictionaries if needed
+        if isinstance(context, list):
+            try:
+                converted_context = []
+                for msg in context:
+                    if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                        converted_context.append({
+                            'role': msg.role,
+                            'content': msg.content
+                        })
+                    elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                        converted_context.append(msg)
+                    else:
+                        raise ValueError(f"Invalid message format: {msg}")
+                
+                context = converted_context
+                print(f"Converted {len(converted_context)} MessageModel objects to dictionaries")
+            except Exception as e:
+                print(f"Error converting context: {e}")
+                raise ValueError(f"Failed to process context: {e}")
+        
+        # Create a progress callback for this task
+        def progress_callback(current, total):
+            update_progress(task_id, current, total)
+        
+        # Run the evaluation
+        print(f"Starting TruthfulQA evaluation...")
+        result = evaluate_truthfulqa(
+            model_name=model,
+            num_examples=examples,
+            context=context,
+            provider=provider,
+            progress_callback=progress_callback
+        )
+        
+        print(f"TruthfulQA evaluation completed successfully")
+        
+        # Create a temporary copy of result to save in memory
+        temp_result = {
+            "status": "completed",
+            "result": result,
+            "params": evaluation_results[task_id].get("params", {}),
+            "completion_time": str(datetime.now())
+        }
+        
+        # Store result before removing from memory
+        if task_id in evaluation_results:
+            evaluation_results[task_id] = temp_result
+            
+            # Remove from memory now that it's completed
+            print(f"Task {task_id} completed. Removing from memory.")
+            time.sleep(1.5)
+            
+            if task_id in evaluation_results:
+                evaluation_results.pop(task_id)
+                print(f"Removed task {task_id} from memory.")
+            
+        print(f"=== TruthfulQA Evaluation Complete (Task ID: {task_id}) ===")
+        return temp_result
+        
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        print(f"Error in TruthfulQA evaluation: {str(e)}")
+        print(error_trace)
+        
+        error_result = {
+            "status": "error",
+            "message": str(e),
+            "traceback": error_trace,
+            "params": evaluation_results[task_id].get("params", {}),
+            "error_time": str(datetime.now())
+        }
+        
+        if task_id in evaluation_results:
+            evaluation_results[task_id] = error_result
+            time.sleep(0.5)
+            
+            if task_id in evaluation_results:
+                evaluation_results.pop(task_id)
+                print(f"Removed errored task {task_id} from memory.")
+                
+        print(f"=== TruthfulQA Evaluation Failed (Task ID: {task_id}) ===")
+        return error_result
 
 if __name__ == "__main__":
     import uvicorn
