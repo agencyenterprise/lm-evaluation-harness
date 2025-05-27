@@ -145,6 +145,12 @@ def load_dataset_local(dataset_name: str, expected_files: List[str] = None):
             dataset_files = [f for f in available_files if f.startswith("truthfulqa_mc_") and f.endswith('.json') and 'info' not in f]
         elif dataset_name == "moral_stories":
             dataset_files = [f for f in available_files if f.startswith("moral_stories_") and f.endswith('.json') and 'info' not in f]
+        elif dataset_name == "arc_challenge":
+            dataset_files = [f for f in available_files if f.startswith("arc_challenge_") and f.endswith('.json') and 'info' not in f]
+        elif dataset_name == "sycophancy":
+            dataset_files = [f for f in available_files if f.startswith("sycophancy_") and f.endswith('.json') and 'info' not in f]
+        elif dataset_name == "air_deception":
+            dataset_files = [f for f in available_files if f.startswith("air_deception_") and f.endswith('.json') and 'info' not in f]
         else:
             # Generic pattern matching
             dataset_files = [f for f in available_files if f.startswith(f"{dataset_name}_") and f.endswith('.json') and 'info' not in f]
@@ -165,13 +171,42 @@ def load_dataset_local(dataset_name: str, expected_files: List[str] = None):
                 split_name = file.replace("truthfulqa_mc_", "").replace(".json", "")
             elif dataset_name == "moral_stories":
                 split_name = file.replace("moral_stories_", "").replace(".json", "")
+            elif dataset_name == "arc_challenge":
+                split_name = file.replace("arc_challenge_", "").replace(".json", "")
+            elif dataset_name == "sycophancy":
+                split_name = file.replace("sycophancy_", "").replace(".json", "")
+            elif dataset_name == "air_deception":
+                split_name = file.replace("air_deception_", "").replace(".json", "")
             else:
                 split_name = file.replace(f"{dataset_name}_", "").replace(".json", "")
                 
             file_path = os.path.join(data_dir, file)
             
-            # Load the split
-            df = pd.read_json(file_path, lines=True)
+            # Load the split - handle different JSON formats
+            try:
+                # First try JSONL format (lines=True) for existing datasets
+                if dataset_name in ["moral_stories", "crows_pairs", "truthfulqa_mc"]:
+                    df = pd.read_json(file_path, lines=True)
+                else:
+                    # For new datasets, try regular JSON format first
+                    with open(file_path, 'r') as f:
+                        data = json.load(f)
+                    df = pd.DataFrame(data)
+            except (ValueError, json.JSONDecodeError):
+                # Fallback to the other format
+                try:
+                    if dataset_name in ["moral_stories", "crows_pairs", "truthfulqa_mc"]:
+                        # Try regular JSON format as fallback
+                        with open(file_path, 'r') as f:
+                            data = json.load(f)
+                        df = pd.DataFrame(data)
+                    else:
+                        # Try JSONL format as fallback
+                        df = pd.read_json(file_path, lines=True)
+                except Exception as e:
+                    print(f"Error loading {file}: {e}")
+                    continue
+            
             dataset = Dataset.from_pandas(df)
             dataset_dict[split_name] = dataset
             
@@ -344,7 +379,7 @@ def save_results_to_db(db, results, dataset_type="general"):
         # Determine collection based on context type and dataset
         context_type = results.get('context_type', 'baseline')
         
-        if dataset_type in ["crows_pairs", "truthfulqa"]:
+        if dataset_type in ["crows_pairs", "truthfulqa", "arc_challenge", "sycophancy", "air_deception"]:
             # Use dataset-specific collection names
             collection_name = f"{dataset_type}_{context_type}_results"
         else:

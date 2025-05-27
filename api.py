@@ -16,6 +16,9 @@ try:
     from run_moral_stories_eval_gen import evaluate_moral_stories_with_openai, get_mongodb_connection
     from run_crows_pairs_eval import evaluate_crows_pairs
     from run_truthfulqa_eval import evaluate_truthfulqa
+    from run_arc_challenge_eval import evaluate_arc_challenge
+    from run_sycophancy_eval import evaluate_sycophancy
+    from run_air_deception_eval import evaluate_air_deception
     from eval_utils import get_mongodb_connection as get_db_connection, make_json_serializable
 except ImportError as e:
     print(f"Failed to import evaluation functions: {e}")
@@ -84,6 +87,39 @@ class TruthfulQARequest(BaseModel):
     use_local_dataset: bool = True
     provider: str = "openai"  # 'openai' or 'anthropic'
 
+class ArcChallengeRequest(BaseModel):
+    model: str
+    examples: int = 5
+    context: Optional[Union[List[MessageModel], str]] = None
+    system: Optional[str] = None
+    message_id: str  # Required - frontend must provide this
+    force_download: bool = False
+    skip_db: bool = False
+    use_local_dataset: bool = True
+    provider: str = "openai"  # 'openai' or 'anthropic'
+
+class SycophancyRequest(BaseModel):
+    model: str
+    examples: int = 5
+    context: Optional[Union[List[MessageModel], str]] = None
+    system: Optional[str] = None
+    message_id: str  # Required - frontend must provide this
+    force_download: bool = False
+    skip_db: bool = False
+    use_local_dataset: bool = True
+    provider: str = "openai"  # 'openai' or 'anthropic'
+
+class AirDeceptionRequest(BaseModel):
+    model: str
+    examples: int = 5
+    context: Optional[Union[List[MessageModel], str]] = None
+    system: Optional[str] = None
+    message_id: str  # Required - frontend must provide this
+    force_download: bool = False
+    skip_db: bool = False
+    use_local_dataset: bool = True
+    provider: str = "openai"  # 'openai' or 'anthropic'
+
 def get_collection_name(evaluation_type: str, has_context: bool) -> str:
     """Get the collection name based on evaluation type and context."""
     context_suffix = "with_context" if has_context else "baseline"
@@ -102,7 +138,10 @@ def find_processing_document(db, message_id: str):
     collections = [
         "baseline_results", "with_context_results",
         "crows_pairs_baseline_results", "crows_pairs_with_context_results",
-        "truthfulqa_baseline_results", "truthfulqa_with_context_results"
+        "truthfulqa_baseline_results", "truthfulqa_with_context_results",
+        "arc_challenge_baseline_results", "arc_challenge_with_context_results",
+        "sycophancy_baseline_results", "sycophancy_with_context_results",
+        "air_deception_baseline_results", "air_deception_with_context_results"
     ]
     
     for collection_name in collections:
@@ -148,6 +187,9 @@ async def root():
             "/evaluate": "POST - Start a moral stories evaluation",
             "/evaluate/crows-pairs": "POST - Start a CrowS-Pairs bias evaluation",
             "/evaluate/truthfulqa": "POST - Start a TruthfulQA evaluation",
+            "/evaluate/arc-challenge": "POST - Start an Arc-Challenge reasoning evaluation",
+            "/evaluate/sycophancy": "POST - Start a Sycophancy evaluation",
+            "/evaluate/air-deception": "POST - Start an AIR-Deception safety evaluation",
             "/result/{task_id}": "GET - Get evaluation results",
             "/tasks": "GET - List all tasks and statuses",
             "/health": "GET - Check API health"
@@ -155,7 +197,10 @@ async def root():
         "available_evaluations": {
             "moral_stories": "Evaluate moral reasoning and ethical decision making",
             "crows_pairs": "Evaluate social biases and stereotyping",
-            "truthfulqa": "Evaluate truthfulness and factual accuracy"
+            "truthfulqa": "Evaluate truthfulness and factual accuracy",
+            "arc_challenge": "Evaluate scientific reasoning and knowledge",
+            "sycophancy": "Evaluate resistance to sycophantic behavior",
+            "air_deception": "Evaluate safety and refusal of harmful requests"
         }
     }
 
@@ -189,7 +234,10 @@ async def health():
         collections = [
             "baseline_results", "with_context_results",
             "crows_pairs_baseline_results", "crows_pairs_with_context_results",
-            "truthfulqa_baseline_results", "truthfulqa_with_context_results"
+            "truthfulqa_baseline_results", "truthfulqa_with_context_results",
+            "arc_challenge_baseline_results", "arc_challenge_with_context_results",
+            "sycophancy_baseline_results", "sycophancy_with_context_results",
+            "air_deception_baseline_results", "air_deception_with_context_results"
         ]
         for collection_name in collections:
             try:
@@ -310,6 +358,102 @@ async def evaluate_truthfulqa_endpoint(request: TruthfulQARequest, background_ta
         "message": f"TruthfulQA evaluation started for model {request.model}"
     }
 
+@app.post("/evaluate/arc-challenge")
+async def evaluate_arc_challenge_endpoint(request: ArcChallengeRequest, background_tasks: BackgroundTasks):
+    """Start Arc-Challenge evaluation. Frontend creates document with processing status."""
+    message_id = request.message_id
+    
+    print(f"\n=== Starting Arc-Challenge Evaluation ===")
+    print(f"Message ID: {message_id}")
+    print(f"Model: {request.model}")
+    print(f"Provider: {request.provider}")
+    print(f"Examples: {request.examples}")
+    print("=" * 50)
+    
+    # Start background task (document already created by frontend)
+    background_tasks.add_task(
+        run_arc_challenge_evaluation,
+        message_id=message_id,
+        model=request.model,
+        examples=request.examples,
+        context=request.context,
+        system=request.system,
+        force_download=request.force_download,
+        skip_db=request.skip_db,
+        use_local_dataset=request.use_local_dataset,
+        provider=request.provider
+    )
+    
+    return {
+        "task_id": message_id,
+        "status": "processing",
+        "message": f"Arc-Challenge evaluation started for model {request.model}"
+    }
+
+@app.post("/evaluate/sycophancy")
+async def evaluate_sycophancy_endpoint(request: SycophancyRequest, background_tasks: BackgroundTasks):
+    """Start Sycophancy evaluation. Frontend creates document with processing status."""
+    message_id = request.message_id
+    
+    print(f"\n=== Starting Sycophancy Evaluation ===")
+    print(f"Message ID: {message_id}")
+    print(f"Model: {request.model}")
+    print(f"Provider: {request.provider}")
+    print(f"Examples: {request.examples}")
+    print("=" * 50)
+    
+    # Start background task (document already created by frontend)
+    background_tasks.add_task(
+        run_sycophancy_evaluation,
+        message_id=message_id,
+        model=request.model,
+        examples=request.examples,
+        context=request.context,
+        system=request.system,
+        force_download=request.force_download,
+        skip_db=request.skip_db,
+        use_local_dataset=request.use_local_dataset,
+        provider=request.provider
+    )
+    
+    return {
+        "task_id": message_id,
+        "status": "processing",
+        "message": f"Sycophancy evaluation started for model {request.model}"
+    }
+
+@app.post("/evaluate/air-deception")
+async def evaluate_air_deception_endpoint(request: AirDeceptionRequest, background_tasks: BackgroundTasks):
+    """Start AIR-Deception evaluation. Frontend creates document with processing status."""
+    message_id = request.message_id
+    
+    print(f"\n=== Starting AIR-Deception Evaluation ===")
+    print(f"Message ID: {message_id}")
+    print(f"Model: {request.model}")
+    print(f"Provider: {request.provider}")
+    print(f"Examples: {request.examples}")
+    print("=" * 50)
+    
+    # Start background task (document already created by frontend)
+    background_tasks.add_task(
+        run_air_deception_evaluation,
+        message_id=message_id,
+        model=request.model,
+        examples=request.examples,
+        context=request.context,
+        system=request.system,
+        force_download=request.force_download,
+        skip_db=request.skip_db,
+        use_local_dataset=request.use_local_dataset,
+        provider=request.provider
+    )
+    
+    return {
+        "task_id": message_id,
+        "status": "processing",
+        "message": f"AIR-Deception evaluation started for model {request.model}"
+    }
+
 @app.get("/result/{task_id}")
 async def get_result(task_id: str):
     """Get evaluation result from database."""
@@ -320,7 +464,10 @@ async def get_result(task_id: str):
         collections = [
             "baseline_results", "with_context_results",
             "crows_pairs_baseline_results", "crows_pairs_with_context_results",
-            "truthfulqa_baseline_results", "truthfulqa_with_context_results"
+            "truthfulqa_baseline_results", "truthfulqa_with_context_results",
+            "arc_challenge_baseline_results", "arc_challenge_with_context_results",
+            "sycophancy_baseline_results", "sycophancy_with_context_results",
+            "air_deception_baseline_results", "air_deception_with_context_results"
         ]
         
         for collection_name in collections:
@@ -384,7 +531,10 @@ async def list_tasks(clear_completed: bool = False):
         collections = [
             "baseline_results", "with_context_results",
             "crows_pairs_baseline_results", "crows_pairs_with_context_results",
-            "truthfulqa_baseline_results", "truthfulqa_with_context_results"
+            "truthfulqa_baseline_results", "truthfulqa_with_context_results",
+            "arc_challenge_baseline_results", "arc_challenge_with_context_results",
+            "sycophancy_baseline_results", "sycophancy_with_context_results",
+            "air_deception_baseline_results", "air_deception_with_context_results"
         ]
         
         for collection_name in collections:
@@ -662,6 +812,249 @@ def run_truthfulqa_evaluation(
         
     except Exception as e:
         error_msg = f"Error in TruthfulQA evaluation: {str(e)}"
+        print(error_msg)
+        traceback.print_exc()
+        
+        if db is not None:
+            update_document_status(
+                db, message_id, "error",
+                error=error_msg,
+                error_at=datetime.now()
+            )
+            print(f"❌ Updated document {message_id} with error status")
+
+def run_arc_challenge_evaluation(
+    message_id: str,
+    model: str,
+    examples: int,
+    context: Optional[Union[List[Dict[str, str]], str]],
+    system: Optional[str],
+    force_download: bool,
+    skip_db: bool,
+    use_local_dataset: bool = True,
+    provider: str = "openai"
+):
+    """Run Arc-Challenge evaluation and update the existing document."""
+    db = get_db_connection() if not skip_db else None
+    
+    try:
+        print(f"\n=== Starting Arc-Challenge Evaluation (Message ID: {message_id}) ===")
+        
+        # Convert context if needed
+        converted_context = None
+        if context:
+            if isinstance(context, list):
+                try:
+                    converted_context = []
+                    for msg in context:
+                        if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                            converted_context.append({'role': msg.role, 'content': msg.content})
+                        elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                            converted_context.append(msg)
+                        else:
+                            raise ValueError(f"Invalid message format: {msg}")
+                    print(f"Converted {len(converted_context)} context messages")
+                except Exception as e:
+                    print(f"Error converting context: {e}")
+                    converted_context = context
+            else:
+                converted_context = context
+        
+        # Handle system prompt
+        if system and converted_context:
+            if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
+                converted_context.insert(0, {"role": "system", "content": system})
+                print(f"Added system message to context list")
+        elif system:
+            converted_context = [{"role": "system", "content": system}]
+            print(f"Created new context with system message")
+        
+        # Define progress callback (just for logging, no DB updates)
+        def progress_callback(current, total):
+            percent = (current / total * 100) if total > 0 else 0
+            print(f"Progress: {current}/{total} ({percent:.1f}%)")
+        
+        # Run evaluation (this will create its own document)
+        result = evaluate_arc_challenge(
+            model_name=model,
+            num_examples=examples,
+            context=converted_context,
+            system=system,
+            provider=provider,
+            progress_callback=progress_callback,
+            db=db,  # Pass the actual database connection so results get saved
+            message_id=message_id
+        )
+        
+        print(f"Arc-Challenge evaluation completed successfully for {message_id}")
+        
+        # The evaluation function already updated the document, no need to update again
+        print(f"✅ Evaluation function handled document update for {message_id}")
+        
+    except Exception as e:
+        error_msg = f"Error in Arc-Challenge evaluation: {str(e)}"
+        print(error_msg)
+        traceback.print_exc()
+        
+        if db is not None:
+            update_document_status(
+                db, message_id, "error",
+                error=error_msg,
+                error_at=datetime.now()
+            )
+            print(f"❌ Updated document {message_id} with error status")
+
+def run_sycophancy_evaluation(
+    message_id: str,
+    model: str,
+    examples: int,
+    context: Optional[Union[List[Dict[str, str]], str]],
+    system: Optional[str],
+    force_download: bool,
+    skip_db: bool,
+    use_local_dataset: bool = True,
+    provider: str = "openai"
+):
+    """Run Sycophancy evaluation and update the existing document."""
+    db = get_db_connection() if not skip_db else None
+    
+    try:
+        print(f"\n=== Starting Sycophancy Evaluation (Message ID: {message_id}) ===")
+        
+        # Convert context if needed
+        converted_context = None
+        if context:
+            if isinstance(context, list):
+                try:
+                    converted_context = []
+                    for msg in context:
+                        if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                            converted_context.append({'role': msg.role, 'content': msg.content})
+                        elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                            converted_context.append(msg)
+                        else:
+                            raise ValueError(f"Invalid message format: {msg}")
+                    print(f"Converted {len(converted_context)} context messages")
+                except Exception as e:
+                    print(f"Error converting context: {e}")
+                    converted_context = context
+            else:
+                converted_context = context
+        
+        # Handle system prompt
+        if system and converted_context:
+            if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
+                converted_context.insert(0, {"role": "system", "content": system})
+                print(f"Added system message to context list")
+        elif system:
+            converted_context = [{"role": "system", "content": system}]
+            print(f"Created new context with system message")
+        
+        # Define progress callback (just for logging, no DB updates)
+        def progress_callback(current, total):
+            percent = (current / total * 100) if total > 0 else 0
+            print(f"Progress: {current}/{total} ({percent:.1f}%)")
+        
+        # Run evaluation (this will create its own document)
+        result = evaluate_sycophancy(
+            model_name=model,
+            num_examples=examples,
+            context=converted_context,
+            system=system,
+            provider=provider,
+            progress_callback=progress_callback,
+            db=db,  # Pass the actual database connection so results get saved
+            message_id=message_id
+        )
+        
+        print(f"Sycophancy evaluation completed successfully for {message_id}")
+        
+        # The evaluation function already updated the document, no need to update again
+        print(f"✅ Evaluation function handled document update for {message_id}")
+        
+    except Exception as e:
+        error_msg = f"Error in Sycophancy evaluation: {str(e)}"
+        print(error_msg)
+        traceback.print_exc()
+        
+        if db is not None:
+            update_document_status(
+                db, message_id, "error",
+                error=error_msg,
+                error_at=datetime.now()
+            )
+            print(f"❌ Updated document {message_id} with error status")
+
+def run_air_deception_evaluation(
+    message_id: str,
+    model: str,
+    examples: int,
+    context: Optional[Union[List[Dict[str, str]], str]],
+    system: Optional[str],
+    force_download: bool,
+    skip_db: bool,
+    use_local_dataset: bool = True,
+    provider: str = "openai"
+):
+    """Run AIR-Deception evaluation and update the existing document."""
+    db = get_db_connection() if not skip_db else None
+    
+    try:
+        print(f"\n=== Starting AIR-Deception Evaluation (Message ID: {message_id}) ===")
+        
+        # Convert context if needed
+        converted_context = None
+        if context:
+            if isinstance(context, list):
+                try:
+                    converted_context = []
+                    for msg in context:
+                        if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                            converted_context.append({'role': msg.role, 'content': msg.content})
+                        elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                            converted_context.append(msg)
+                        else:
+                            raise ValueError(f"Invalid message format: {msg}")
+                    print(f"Converted {len(converted_context)} context messages")
+                except Exception as e:
+                    print(f"Error converting context: {e}")
+                    converted_context = context
+            else:
+                converted_context = context
+        
+        # Handle system prompt
+        if system and converted_context:
+            if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
+                converted_context.insert(0, {"role": "system", "content": system})
+                print(f"Added system message to context list")
+        elif system:
+            converted_context = [{"role": "system", "content": system}]
+            print(f"Created new context with system message")
+        
+        # Define progress callback (just for logging, no DB updates)
+        def progress_callback(current, total):
+            percent = (current / total * 100) if total > 0 else 0
+            print(f"Progress: {current}/{total} ({percent:.1f}%)")
+        
+        # Run evaluation (this will create its own document)
+        result = evaluate_air_deception(
+            model_name=model,
+            num_examples=examples,
+            context=converted_context,
+            system=system,
+            provider=provider,
+            progress_callback=progress_callback,
+            db=db,  # Pass the actual database connection so results get saved
+            message_id=message_id
+        )
+        
+        print(f"AIR-Deception evaluation completed successfully for {message_id}")
+        
+        # The evaluation function already updated the document, no need to update again
+        print(f"✅ Evaluation function handled document update for {message_id}")
+        
+    except Exception as e:
+        error_msg = f"Error in AIR-Deception evaluation: {str(e)}"
         print(error_msg)
         traceback.print_exc()
         
