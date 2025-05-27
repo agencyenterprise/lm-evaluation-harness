@@ -360,7 +360,23 @@ def save_results_to_db(db, results, dataset_type="general"):
         # Make data serializable
         serializable_results = make_json_serializable(results_copy)
         
-        # Insert results
+        # Check if we should update existing document (when message_id is provided)
+        message_id = serializable_results.get("message_id")
+        if message_id:
+            # Try to find and update existing document with this message_id and status="processing"
+            existing_doc = collection.find_one({"message_id": message_id, "status": "processing"})
+            if existing_doc:
+                # Update the existing document
+                serializable_results["status"] = "completed"
+                serializable_results["completed_at"] = datetime.now()
+                update_result = collection.update_one(
+                    {"_id": existing_doc["_id"]},
+                    {"$set": serializable_results}
+                )
+                print(f"Updated existing document with message_id {message_id} in collection '{collection_name}'")
+                return existing_doc["_id"]
+        
+        # If no existing document found or no message_id, create new document
         result = collection.insert_one(serializable_results)
         print(f"Saved {dataset_type} results to database collection '{collection_name}' with ID: {result.inserted_id}")
         return result.inserted_id

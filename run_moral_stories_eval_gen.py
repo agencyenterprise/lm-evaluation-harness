@@ -95,7 +95,23 @@ def save_results_to_db(db, results):
         results_copy = results.copy()
         results_copy["timestamp"] = datetime.now()
         
-        # Insert results
+        # Check if we should update existing document (when message_id is provided)
+        message_id = results_copy.get("message_id")
+        if message_id:
+            # Try to find and update existing document with this message_id and status="processing"
+            existing_doc = collection.find_one({"message_id": message_id, "status": "processing"})
+            if existing_doc:
+                # Update the existing document
+                results_copy["status"] = "completed"
+                results_copy["completed_at"] = datetime.now()
+                update_result = collection.update_one(
+                    {"_id": existing_doc["_id"]},
+                    {"$set": results_copy}
+                )
+                print(f"Updated existing document with message_id {message_id} in collection '{collection_name}'")
+                return existing_doc["_id"]
+        
+        # If no existing document found or no message_id, create new document
         result = collection.insert_one(results_copy)
         print(f"Saved results to database with ID: {result.inserted_id}")
         return result.inserted_id
