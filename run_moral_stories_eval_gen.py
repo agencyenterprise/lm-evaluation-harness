@@ -14,6 +14,17 @@ from dotenv import load_dotenv
 import pymongo
 from datetime import datetime
 
+# Import the evaluation functions
+try:
+    from eval_utils import (
+        create_deterministic_sample, parse_context as parse_context_shared, 
+        get_context_type
+    )
+    has_eval_utils = True
+except ImportError:
+    # Fall back to local functions if eval_utils not available
+    has_eval_utils = False
+
 # Helper function to make data JSON serializable
 def make_json_serializable(obj):
     if isinstance(obj, (np.integer, np.int64, np.int32)):
@@ -476,9 +487,14 @@ def evaluate_moral_stories_with_openai(
     else:
         dataset = load_moral_stories_force_redownload(cache_dir)
     
-    # Parse the context
-    parsed_context = parse_conversation_context(context)
-    context_type = "with_context" if parsed_context else "baseline"
+    # Parse the context using the shared function
+    if has_eval_utils:
+        parsed_context = parse_context_shared(context) 
+        context_type = get_context_type(context)
+    else:
+        # Fallback to local function
+        parsed_context = parse_conversation_context(context)
+        context_type = "with_context" if parsed_context else "baseline"
     
     # Stringify context for display and logging
     context_summary = ""
@@ -486,21 +502,21 @@ def evaluate_moral_stories_with_openai(
         context_summary = "\n".join([f"{msg['role']}: {msg['content'][:50]}..." if len(msg['content']) > 50 else f"{msg['role']}: {msg['content']}" for msg in parsed_context])
         print(f"Using conversation context:\n{context_summary}\n")
     
-    # Take N samples from the dataset
-    train_size = len(dataset["train"])
-    if num_examples > train_size:
-        print(f"Warning: Requested {num_examples} examples but dataset only has {train_size}. Using all available examples.")
-        num_examples = train_size
-    
-    # Use a deterministic seed for reproducibility but allow for different samples
-    # by using the hash of the model_name and context
-    seed = hash(f"{model_name}_{context_summary if context_summary else 'baseline'}") % 10000
-    np.random.seed(seed)
-    
-    # Select random indices
-    indices = np.random.choice(train_size, num_examples, replace=False)
-    samples = dataset["train"].select(indices)
-    print(f"Selected {num_examples} examples with seed {seed}")
+    # Use the shared sampling function that can utilize baseline examples
+    if has_eval_utils:
+        samples = create_deterministic_sample(dataset["train"], num_examples, model_name, context_type, db, "general")
+    else:
+        # Fall back to original sampling logic
+        train_size = len(dataset["train"])
+        if num_examples > train_size:
+            print(f"Warning: Requested {num_examples} examples but dataset only has {train_size}. Using all available examples.")
+            num_examples = train_size
+        
+        seed = hash(f"{model_name}_{context_summary if context_summary else 'baseline'}") % 10000
+        np.random.seed(seed)
+        indices = np.random.choice(train_size, num_examples, replace=False)
+        samples = dataset["train"].select(indices)
+        print(f"Selected {num_examples} examples with seed {seed}")
     
     # Process samples into prompt format
     all_messages = []

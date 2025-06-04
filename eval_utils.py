@@ -360,21 +360,180 @@ def get_context_type(context: Optional[Union[str, List, Dict]]) -> str:
     parsed_context = parse_context(context)
     return "with_context" if parsed_context else "baseline"
 
-def create_deterministic_sample(dataset_split, num_examples: int, model_name: str, context_type: str):
-    """Create a deterministic sample from a dataset split."""
+def get_baseline_examples_from_db(db, model_name: str, dataset_type: str = "general") -> Optional[List[Dict]]:
+    """
+    Fetch examples used in baseline evaluation from database.
+    
+    Args:
+        db: MongoDB database connection
+        model_name: Name of the model to find baseline for
+        dataset_type: Type of dataset ('general' for moral_stories, 'crows_pairs', 'truthfulqa', etc.)
+    
+    Returns:
+        List of sample dictionaries used in baseline evaluation, or None if not found
+    """
+    if db is None:
+        return None
+    
+    try:
+        # Determine collection name for baseline
+        if dataset_type == "general":
+            collection_name = "baseline_results"
+        else:
+            collection_name = f"{dataset_type}_baseline_results"
+        
+        collection = db[collection_name]
+        
+        # Find the most recent baseline evaluation for this model
+        baseline_doc = collection.find_one(
+            {"model": model_name, "context_type": "baseline"},
+            sort=[("timestamp", -1)]
+        )
+        
+        if baseline_doc:
+            # Extract samples from the baseline evaluation
+            if dataset_type == "general" and "moral_stories_gen" in baseline_doc:
+                samples = baseline_doc["moral_stories_gen"].get("samples", [])
+            elif dataset_type == "crows_pairs" and "crows_pairs" in baseline_doc:
+                samples = baseline_doc["crows_pairs"].get("samples", [])
+            elif dataset_type == "truthfulqa" and "truthfulqa" in baseline_doc:
+                samples = baseline_doc["truthfulqa"].get("samples", [])
+            elif dataset_type == "arc_challenge" and "arc_challenge" in baseline_doc:
+                samples = baseline_doc["arc_challenge"].get("samples", [])
+            elif dataset_type == "sycophancy" and "sycophancy" in baseline_doc:
+                samples = baseline_doc["sycophancy"].get("samples", [])
+            elif dataset_type == "air_deception" and "air_deception" in baseline_doc:
+                samples = baseline_doc["air_deception"].get("samples", [])
+            else:
+                print(f"Warning: Could not find samples in baseline document for {dataset_type}")
+                return None
+            
+            print(f"Found baseline evaluation for {model_name} with {len(samples)} examples")
+            return samples
+        else:
+            print(f"No baseline evaluation found for model {model_name} in {collection_name}")
+            return None
+            
+    except Exception as e:
+        print(f"Error fetching baseline examples: {e}")
+        return None
+
+def create_deterministic_sample(dataset_split, num_examples: int, model_name: str, context_type: str, db=None, dataset_type: str = "general"):
+    """
+    Create a deterministic sample from a dataset split.
+    For with-context evaluations, tries to use the same examples as the baseline evaluation.
+    """
     split_size = len(dataset_split)
     if num_examples > split_size:
         print(f"Warning: Requested {num_examples} examples but dataset only has {split_size}. Using all available examples.")
         num_examples = split_size
     
-    # Use deterministic sampling
+    # If this is a with-context evaluation, try to use baseline examples
+    if context_type == "with_context" and db is not None:
+        baseline_samples = get_baseline_examples_from_db(db, model_name, dataset_type)
+        
+        if baseline_samples:
+            # Extract the identifying information from baseline samples to find matching examples
+            if dataset_type == "general":  # moral_stories
+                baseline_contexts = [sample.get("context", "") for sample in baseline_samples]
+                matching_indices = []
+                
+                for i, example in enumerate(dataset_split):
+                    # Create context from norm, situation, and intention like in moral stories
+                    example_context = (
+                        example["norm"].capitalize() + " " + 
+                        example["situation"].capitalize() + " " + 
+                        example["intention"].capitalize()
+                    )
+                    if example_context in baseline_contexts:
+                        matching_indices.append(i)
+                
+                if len(matching_indices) >= num_examples:
+                    # Use the same examples as baseline
+                    selected_indices = matching_indices[:num_examples]
+                    samples = dataset_split.select(selected_indices)
+                    print(f"Using {num_examples} examples from baseline evaluation (matched {len(matching_indices)} total)")
+                    return samples
+                else:
+                    print(f"Could only match {len(matching_indices)}/{num_examples} examples from baseline, falling back to random sampling")
+            
+            elif dataset_type == "crows_pairs":
+                baseline_pairs = [(sample.get("sent_more", ""), sample.get("sent_less", "")) for sample in baseline_samples]
+                matching_indices = []
+                
+                for i, example in enumerate(dataset_split):
+                    example_pair = (example["sent_more"], example["sent_less"])
+                    if example_pair in baseline_pairs:
+                        matching_indices.append(i)
+                
+                if len(matching_indices) >= num_examples:
+                    selected_indices = matching_indices[:num_examples]
+                    samples = dataset_split.select(selected_indices)
+                    print(f"Using {num_examples} examples from baseline evaluation (matched {len(matching_indices)} total)")
+                    return samples
+                else:
+                    print(f"Could only match {len(matching_indices)}/{num_examples} examples from baseline, falling back to random sampling")
+            
+            elif dataset_type in ["truthfulqa", "arc_challenge"]:
+                baseline_questions = [sample.get("question", "") for sample in baseline_samples]
+                matching_indices = []
+                
+                for i, example in enumerate(dataset_split):
+                    if example["question"] in baseline_questions:
+                        matching_indices.append(i)
+                
+                if len(matching_indices) >= num_examples:
+                    selected_indices = matching_indices[:num_examples]
+                    samples = dataset_split.select(selected_indices)
+                    print(f"Using {num_examples} examples from baseline evaluation (matched {len(matching_indices)} total)")
+                    return samples
+                else:
+                    print(f"Could only match {len(matching_indices)}/{num_examples} examples from baseline, falling back to random sampling")
+            
+            elif dataset_type == "sycophancy":
+                baseline_questions = [sample.get("question", "") for sample in baseline_samples]
+                matching_indices = []
+                
+                for i, example in enumerate(dataset_split):
+                    if example["question"] in baseline_questions:
+                        matching_indices.append(i)
+                
+                if len(matching_indices) >= num_examples:
+                    selected_indices = matching_indices[:num_examples]
+                    samples = dataset_split.select(selected_indices)
+                    print(f"Using {num_examples} examples from baseline evaluation (matched {len(matching_indices)} total)")
+                    return samples
+                else:
+                    print(f"Could only match {len(matching_indices)}/{num_examples} examples from baseline, falling back to random sampling")
+            
+            elif dataset_type == "air_deception":
+                baseline_prompts = [sample.get("prompt", "") for sample in baseline_samples]
+                matching_indices = []
+                
+                for i, example in enumerate(dataset_split):
+                    if example["prompt"] in baseline_prompts:
+                        matching_indices.append(i)
+                
+                if len(matching_indices) >= num_examples:
+                    selected_indices = matching_indices[:num_examples]
+                    samples = dataset_split.select(selected_indices)
+                    print(f"Using {num_examples} examples from baseline evaluation (matched {len(matching_indices)} total)")
+                    return samples
+                else:
+                    print(f"Could only match {len(matching_indices)}/{num_examples} examples from baseline, falling back to random sampling")
+    
+    # Fall back to deterministic random sampling
     import numpy as np
     seed = hash(f"{model_name}_{context_type}") % 10000
     np.random.seed(seed)
     
     indices = np.random.choice(split_size, num_examples, replace=False)
     samples = dataset_split.select(indices)
-    print(f"Selected {num_examples} examples with seed {seed}")
+    
+    if context_type == "with_context":
+        print(f"Selected {num_examples} examples with random sampling (seed {seed}) - no baseline found or couldn't match examples")
+    else:
+        print(f"Selected {num_examples} examples with seed {seed}")
     
     return samples
 

@@ -70,7 +70,7 @@ def evaluate_crows_pairs(
     split_data = dataset[split_name]
     
     # Create deterministic sample
-    samples = create_deterministic_sample(split_data, num_examples, model_name, context_type)
+    samples = create_deterministic_sample(split_data, num_examples, model_name, context_type, db, "crows_pairs")
     print_evaluation_header("CrowS-Pairs", model_name, context_type, num_examples)
     
     # Process samples

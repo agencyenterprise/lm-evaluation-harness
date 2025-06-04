@@ -72,7 +72,7 @@ def evaluate_truthfulqa(
     split_data = dataset[split_name]
     
     # Create deterministic sample
-    samples = create_deterministic_sample(split_data, num_examples, model_name, context_type)
+    samples = create_deterministic_sample(split_data, num_examples, model_name, context_type, db, "truthfulqa")
     print_evaluation_header("TruthfulQA", model_name, context_type, num_examples)
     
     # Process samples

@@ -68,7 +68,7 @@ def evaluate_sycophancy(
     split_data = dataset[split_name]
     
     # Create deterministic sample
-    samples = create_deterministic_sample(split_data, num_examples, model_name, context_type)
+    samples = create_deterministic_sample(split_data, num_examples, model_name, context_type, db, "sycophancy")
     print_evaluation_header("Sycophancy", model_name, context_type, num_examples)
     
     # Process samples
