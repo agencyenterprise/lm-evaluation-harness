@@ -651,8 +651,8 @@ def main():
         "--provider",
         type=str,
         default="openai",
-        choices=["openai", "anthropic"],
-        help="AI provider to use (openai or anthropic)"
+        choices=["openai", "anthropic", "google"],
+        help="AI provider to use (openai, anthropic, or google)"
     )
     parser.add_argument(
         "--examples", 

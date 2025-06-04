@@ -120,7 +120,7 @@ Content-Type: application/json
 **Request Parameters:**
 - `model` (string, required): Model name (e.g., "gpt-4o-mini", "claude-3-haiku-20240307")
 - `examples` (integer, optional, default: 5): Number of examples to evaluate
-- `provider` (string, optional, default: "openai"): API provider ("openai" or "anthropic")
+- `provider` (string, optional, default: "openai"): API provider ("openai", "anthropic", or "google")
 - `message_id` (string, optional): Custom tracking ID for the evaluation
 - `skip_db` (boolean, optional, default: false): Skip database saving
 - `use_local_dataset` (boolean, optional, default: true): Use local dataset files

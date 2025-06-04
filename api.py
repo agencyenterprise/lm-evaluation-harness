@@ -57,7 +57,7 @@ class EvaluationRequest(BaseModel):
     force_download: bool = False
     skip_db: bool = False
     use_local_dataset: bool = True
-    provider: str = "openai"  # 'openai' or 'anthropic'
+    provider: str = "openai"  # 'openai', 'anthropic', or 'google'
 
 class EvaluationResponse(BaseModel):
     task_id: str
@@ -74,7 +74,7 @@ class CrowsPairsRequest(BaseModel):
     force_download: bool = False
     skip_db: bool = False
     use_local_dataset: bool = True
-    provider: str = "openai"  # 'openai' or 'anthropic'
+    provider: str = "openai"  # 'openai', 'anthropic', or 'google'
 
 class TruthfulQARequest(BaseModel):
     model: str
@@ -85,7 +85,7 @@ class TruthfulQARequest(BaseModel):
     force_download: bool = False
     skip_db: bool = False
     use_local_dataset: bool = True
-    provider: str = "openai"  # 'openai' or 'anthropic'
+    provider: str = "openai"  # 'openai', 'anthropic', or 'google'
 
 class ArcChallengeRequest(BaseModel):
     model: str
@@ -96,7 +96,7 @@ class ArcChallengeRequest(BaseModel):
     force_download: bool = False
     skip_db: bool = False
     use_local_dataset: bool = True
-    provider: str = "openai"  # 'openai' or 'anthropic'
+    provider: str = "openai"  # 'openai', 'anthropic', or 'google'
 
 class SycophancyRequest(BaseModel):
     model: str
@@ -107,7 +107,7 @@ class SycophancyRequest(BaseModel):
     force_download: bool = False
     skip_db: bool = False
     use_local_dataset: bool = True
-    provider: str = "openai"  # 'openai' or 'anthropic'
+    provider: str = "openai"  # 'openai', 'anthropic', or 'google'
 
 class AirDeceptionRequest(BaseModel):
     model: str
@@ -118,7 +118,7 @@ class AirDeceptionRequest(BaseModel):
     force_download: bool = False
     skip_db: bool = False
     use_local_dataset: bool = True
-    provider: str = "openai"  # 'openai' or 'anthropic'
+    provider: str = "openai"  # 'openai', 'anthropic', or 'google'
 
 def get_collection_name(evaluation_type: str, has_context: bool) -> str:
     """Get the collection name based on evaluation type and context."""
@@ -212,6 +212,7 @@ async def health():
     # Check API keys
     openai_key_status = "Available" if os.environ.get("OPENAI_API_KEY") else "Missing"
     anthropic_key_status = "Available" if os.environ.get("ANTHROPIC_API_KEY") else "Missing"
+    gemini_key_status = "Available" if os.environ.get("GEMINI_API_KEY") else "Missing"
     
     # Check MongoDB connection
     mongo_status = "Not checked"
@@ -255,7 +256,8 @@ async def health():
         "platform": platform.platform(),
         "api_keys": {
             "openai": openai_key_status,
-            "anthropic": anthropic_key_status
+            "anthropic": anthropic_key_status,
+            "google": gemini_key_status
         },
         "env_vars_available": env_vars,
         "mongodb": mongo_status,

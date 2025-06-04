@@ -15,7 +15,7 @@ This evaluation system tests language models across three critical dimensions:
 - **Multiple Evaluation Types**: Moral reasoning, bias detection, and truthfulness testing
 - **API & CLI Interfaces**: RESTful API endpoints and command-line scripts
 - **Database Persistence**: Full MongoDB integration with historical result storage
-- **Multi-Provider Support**: OpenAI and Anthropic API compatibility
+- **Multi-Provider Support**: OpenAI, Anthropic, and Google/Gemini API compatibility
 - **Context Evaluation**: Test models with and without conversation context
 - **Progress Tracking**: Real-time evaluation progress and status updates
 - **Deterministic Sampling**: Reproducible results with consistent sample selection

@@ -31,6 +31,8 @@ def get_api_key(provider="openai"):
         api_keys_found.append("OPENAI_API_KEY")
     if "ANTHROPIC_API_KEY" in env_vars:
         api_keys_found.append("ANTHROPIC_API_KEY")
+    if "GEMINI_API_KEY" in env_vars:
+        api_keys_found.append("GEMINI_API_KEY")
     
     print(f"API keys found in environment: {', '.join(api_keys_found) if api_keys_found else 'None'}")
     
@@ -40,6 +42,12 @@ def get_api_key(provider="openai"):
             print(f"Found Anthropic API key (length: {len(api_key)})")
             return "anthropic", api_key
         raise ValueError("Anthropic API key not found. Please set ANTHROPIC_API_KEY in your environment or .env file.")
+    elif provider == "google":
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if api_key:
+            print(f"Found Google/Gemini API key (length: {len(api_key)})")
+            return "google", api_key
+        raise ValueError("Google/Gemini API key not found. Please set GEMINI_API_KEY in your environment or .env file.")
     else:
         api_key = os.environ.get("OPENAI_API_KEY")
         if api_key:
@@ -48,9 +56,11 @@ def get_api_key(provider="openai"):
         raise ValueError("OpenAI API key not found. Please set OPENAI_API_KEY in your environment or .env file.")
 
 def create_chat_completion(provider: str, model: str, messages: List[Dict[str, str]]) -> str:
-    """Create a chat completion using either OpenAI or Anthropic based on provider."""
+    """Create a chat completion using OpenAI, Anthropic, or Google based on provider."""
     if provider == "anthropic":
         return create_anthropic_chat_completion(model, messages)
+    elif provider == "google":
+        return create_google_chat_completion(model, messages)
     else:
         return create_openai_chat_completion(model, messages)
 
@@ -117,6 +127,119 @@ def create_anthropic_chat_completion(model: str, messages: List[Dict[str, str]])
         raise Exception(f"API Error: {response.status_code}, {response.text}")
     
     return response.json()["content"][0]["text"]
+
+def create_google_chat_completion(model: str, messages: List[Dict[str, str]]) -> str:
+    """Call the Google Gemini API with a list of messages."""
+    api_type, api_key = get_api_key("google")
+    
+    # Convert messages to Google's format
+    # Google expects an array of contents, each with role and parts
+    contents = []
+    
+    for msg in messages:
+        if msg["role"] == "system":
+            # Google doesn't support system messages - we'll prepend system message as user message
+            contents.append({
+                "role": "user",
+                "parts": [{"text": f"System instruction: {msg['content']}\n\nPlease follow this instruction in your responses. Keep your response concise and direct."}]
+            })
+        elif msg["role"] == "user":
+            # Add instruction for concise responses to user messages
+            user_content = msg["content"]
+            if not any(phrase in user_content.lower() for phrase in ["answer with just", "respond with only", "keep it brief", "concise"]):
+                user_content += "\n\nPlease provide a direct, concise response."
+            
+            contents.append({
+                "role": "user", 
+                "parts": [{"text": user_content}]
+            })
+        elif msg["role"] == "assistant":
+            contents.append({
+                "role": "model",  # Google uses 'model' instead of 'assistant'
+                "parts": [{"text": msg["content"]}]
+            })
+    
+    # Handle case where we only have system message - add a simple user message
+    if len(contents) == 1 and "System instruction:" in contents[0]["parts"][0]["text"]:
+        contents.append({
+            "role": "user",
+            "parts": [{"text": "Please respond with your understanding."}]
+        })
+    
+    payload = {
+        "contents": contents,
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 8192,  # Significantly increased to handle thinking process
+            "topP": 0.8,
+            "topK": 40
+        },
+        "safetySettings": [
+            {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            },
+            {
+                "category": "HARM_CATEGORY_HATE_SPEECH", 
+                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            },
+            {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            },
+            {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+            }
+        ]
+    }
+    
+    # Google API endpoint format
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    
+    headers = {
+        "Content-Type": "application/json"
+    }
+    
+    response = requests.post(url, headers=headers, json=payload)
+    
+    if response.status_code != 200:
+        raise Exception(f"Google API Error: {response.status_code}, {response.text}")
+    
+    response_data = response.json()
+    
+    # Extract text from Google's response format
+    if "candidates" in response_data and len(response_data["candidates"]) > 0:
+        candidate = response_data["candidates"][0]
+        
+        # Check finish reason for issues
+        finish_reason = candidate.get("finishReason", "UNKNOWN")
+        if finish_reason in ["MAX_TOKENS", "RECITATION", "SAFETY"]:
+            print(f"Warning: Google API response truncated due to {finish_reason}")
+        
+        if "content" in candidate:
+            content = candidate["content"]
+            if "parts" in content and len(content["parts"]) > 0:
+                # Normal case - extract text from parts
+                first_part = content["parts"][0]
+                if "text" in first_part:
+                    return first_part["text"]
+                else:
+                    raise Exception(f"Google API response part missing 'text' field: {first_part}")
+            else:
+                # Handle case where content exists but parts is missing/empty
+                if finish_reason == "MAX_TOKENS":
+                    raise Exception("Google API response truncated due to token limit. The model hit maxOutputTokens before completing the response.")
+                elif finish_reason == "SAFETY":
+                    raise Exception("Google API response blocked due to safety filters.")
+                elif finish_reason == "RECITATION":
+                    raise Exception("Google API response blocked due to recitation detection.")
+                else:
+                    raise Exception(f"Google API response content missing 'parts' field. FinishReason: {finish_reason}, Content: {content}")
+        else:
+            raise Exception(f"Google API response candidate missing 'content' field: {candidate}")
+    
+    raise Exception(f"Google API response missing candidates or empty candidates list: {response_data}")
 
 def load_dataset_local(dataset_name: str, expected_files: List[str] = None):
     """
