@@ -459,68 +459,96 @@ def create_deterministic_sample(dataset_split, num_examples: int, model_name: st
             
             elif dataset_type == "crows_pairs":
                 baseline_pairs = [(sample.get("sent_more", ""), sample.get("sent_less", "")) for sample in baseline_samples]
-                matching_indices = []
+                # Create a mapping from pair to its original position in baseline
+                pair_to_baseline_index = {pair: i for i, pair in enumerate(baseline_pairs)}
+                
+                # Find all examples in dataset that match baseline pairs
+                matching_examples = []
                 
                 for i, example in enumerate(dataset_split):
                     example_pair = (example["sent_more"], example["sent_less"])
                     if example_pair in baseline_pairs:
-                        matching_indices.append(i)
+                        baseline_index = pair_to_baseline_index[example_pair]
+                        matching_examples.append((baseline_index, i))
                 
-                if len(matching_indices) >= num_examples:
-                    selected_indices = matching_indices[:num_examples]
+                if len(matching_examples) >= num_examples:
+                    # Sort by original baseline order and take the first num_examples
+                    matching_examples.sort(key=lambda x: x[0])  # Sort by baseline_index
+                    selected_indices = [x[1] for x in matching_examples[:num_examples]]  # Get dataset indices
                     samples = dataset_split.select(selected_indices)
-                    print(f"Using {num_examples} examples from baseline evaluation (matched {len(matching_indices)} total)")
+                    print(f"Using {num_examples} examples from baseline evaluation (matched {len(matching_examples)} total)")
                     return samples
                 else:
-                    print(f"Could only match {len(matching_indices)}/{num_examples} examples from baseline, falling back to random sampling")
+                    print(f"Could only match {len(matching_examples)}/{num_examples} examples from baseline, falling back to random sampling")
             
             elif dataset_type in ["truthfulqa", "arc_challenge"]:
                 baseline_questions = [sample.get("question", "") for sample in baseline_samples]
-                matching_indices = []
+                # Create a mapping from question to its original position in baseline
+                question_to_baseline_index = {question: i for i, question in enumerate(baseline_questions)}
+                
+                # Find all examples in dataset that match baseline questions
+                matching_examples = []
                 
                 for i, example in enumerate(dataset_split):
                     if example["question"] in baseline_questions:
-                        matching_indices.append(i)
+                        baseline_index = question_to_baseline_index[example["question"]]
+                        matching_examples.append((baseline_index, i))
                 
-                if len(matching_indices) >= num_examples:
-                    selected_indices = matching_indices[:num_examples]
+                if len(matching_examples) >= num_examples:
+                    # Sort by original baseline order and take the first num_examples
+                    matching_examples.sort(key=lambda x: x[0])  # Sort by baseline_index
+                    selected_indices = [x[1] for x in matching_examples[:num_examples]]  # Get dataset indices
                     samples = dataset_split.select(selected_indices)
-                    print(f"Using {num_examples} examples from baseline evaluation (matched {len(matching_indices)} total)")
+                    print(f"Using {num_examples} examples from baseline evaluation (matched {len(matching_examples)} total)")
                     return samples
                 else:
-                    print(f"Could only match {len(matching_indices)}/{num_examples} examples from baseline, falling back to random sampling")
+                    print(f"Could only match {len(matching_examples)}/{num_examples} examples from baseline, falling back to random sampling")
             
             elif dataset_type == "sycophancy":
                 baseline_questions = [sample.get("question", "") for sample in baseline_samples]
-                matching_indices = []
+                # Create a mapping from question to its original position in baseline
+                question_to_baseline_index = {question: i for i, question in enumerate(baseline_questions)}
+                
+                # Find all examples in dataset that match baseline questions
+                matching_examples = []
                 
                 for i, example in enumerate(dataset_split):
                     if example["question"] in baseline_questions:
-                        matching_indices.append(i)
+                        baseline_index = question_to_baseline_index[example["question"]]
+                        matching_examples.append((baseline_index, i))
                 
-                if len(matching_indices) >= num_examples:
-                    selected_indices = matching_indices[:num_examples]
+                if len(matching_examples) >= num_examples:
+                    # Sort by original baseline order and take the first num_examples
+                    matching_examples.sort(key=lambda x: x[0])  # Sort by baseline_index
+                    selected_indices = [x[1] for x in matching_examples[:num_examples]]  # Get dataset indices
                     samples = dataset_split.select(selected_indices)
-                    print(f"Using {num_examples} examples from baseline evaluation (matched {len(matching_indices)} total)")
+                    print(f"Using {num_examples} examples from baseline evaluation (matched {len(matching_examples)} total)")
                     return samples
                 else:
-                    print(f"Could only match {len(matching_indices)}/{num_examples} examples from baseline, falling back to random sampling")
+                    print(f"Could only match {len(matching_examples)}/{num_examples} examples from baseline, falling back to random sampling")
             
             elif dataset_type == "air_deception":
                 baseline_prompts = [sample.get("prompt", "") for sample in baseline_samples]
-                matching_indices = []
+                # Create a mapping from prompt to its original position in baseline
+                prompt_to_baseline_index = {prompt: i for i, prompt in enumerate(baseline_prompts)}
+                
+                # Find all examples in dataset that match baseline prompts
+                matching_examples = []
                 
                 for i, example in enumerate(dataset_split):
                     if example["prompt"] in baseline_prompts:
-                        matching_indices.append(i)
+                        baseline_index = prompt_to_baseline_index[example["prompt"]]
+                        matching_examples.append((baseline_index, i, example["prompt"]))
                 
-                if len(matching_indices) >= num_examples:
-                    selected_indices = matching_indices[:num_examples]
+                if len(matching_examples) >= num_examples:
+                    # Sort by original baseline order and take the first num_examples
+                    matching_examples.sort(key=lambda x: x[0])  # Sort by baseline_index
+                    selected_indices = [x[1] for x in matching_examples[:num_examples]]  # Get dataset indices
                     samples = dataset_split.select(selected_indices)
-                    print(f"Using {num_examples} examples from baseline evaluation (matched {len(matching_indices)} total)")
+                    print(f"Using {num_examples} examples from baseline evaluation (matched {len(matching_examples)} total)")
                     return samples
                 else:
-                    print(f"Could only match {len(matching_indices)}/{num_examples} examples from baseline, falling back to random sampling")
+                    print(f"Could only match {len(matching_examples)}/{num_examples} examples from baseline, falling back to random sampling")
     
     # Fall back to deterministic random sampling
     import numpy as np
