@@ -7,6 +7,7 @@ python-dotenv==0.21.1
 pymongo==4.3.3
 regex==2022.10.31
 python-multipart==0.0.5
+psutil==5.9.8
 # Use a specific HF datasets version
 datasets==2.9.0
 huggingface_hub==0.13.3

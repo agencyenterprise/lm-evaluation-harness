@@ -10,6 +10,10 @@ from dotenv import load_dotenv
 from datetime import datetime
 import time
 import threading
+import weakref
+from contextlib import contextmanager
+import gc
+import psutil
 
 # Import the evaluation functions
 try:
@@ -177,6 +181,85 @@ def update_document_status(db, message_id: str, status: str, **kwargs):
         print(f"No processing document found for message_id: {message_id}")
         return None
 
+# Add connection pool management
+_db_connection_pool = weakref.WeakValueDictionary()
+_connection_lock = threading.Lock()
+
+@contextmanager
+def get_db_connection_managed():
+    """Context manager for database connections with proper cleanup."""
+    db = None
+    try:
+        db = get_db_connection()
+        yield db
+    finally:
+        if db is not None:
+            # Ensure connection is properly closed
+            try:
+                db.close()
+            except:
+                pass
+
+# Add performance monitoring
+def log_memory_usage(operation: str):
+    """Log current memory usage for monitoring."""
+    try:
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        print(f"Memory usage after {operation}: {memory_info.rss / 1024 / 1024:.1f} MB")
+    except:
+        pass
+
+# Add cleanup utilities
+def cleanup_old_cache_files(cache_dir: str, max_age_days: int = 7):
+    """Clean up old cache files to prevent disk space issues."""
+    if not os.path.exists(cache_dir):
+        return
+    
+    try:
+        import time
+        current_time = time.time()
+        max_age_seconds = max_age_days * 24 * 60 * 60
+        
+        for root, dirs, files in os.walk(cache_dir):
+            for file in files:
+                file_path = os.path.join(root, file)
+                if current_time - os.path.getmtime(file_path) > max_age_seconds:
+                    os.remove(file_path)
+                    print(f"Cleaned up old cache file: {file_path}")
+    except Exception as e:
+        print(f"Error cleaning cache: {e}")
+
+# Add database cleanup
+def cleanup_old_database_records(db, max_age_days: int = 30):
+    """Clean up old database records to prevent unlimited growth."""
+    try:
+        from datetime import datetime, timedelta
+        cutoff_date = datetime.now() - timedelta(days=max_age_days)
+        
+        collections = [
+            "baseline_results", "with_context_results",
+            "crows_pairs_baseline_results", "crows_pairs_with_context_results",
+            "truthfulqa_baseline_results", "truthfulqa_with_context_results",
+            "arc_challenge_baseline_results", "arc_challenge_with_context_results",
+            "sycophancy_baseline_results", "sycophancy_with_context_results",
+            "air_deception_baseline_results", "air_deception_with_context_results"
+        ]
+        
+        for collection_name in collections:
+            try:
+                collection = db[collection_name]
+                result = collection.delete_many({
+                    "status": {"$in": ["completed", "error"]},
+                    "updated_at": {"$lt": cutoff_date}
+                })
+                if result.deleted_count > 0:
+                    print(f"Cleaned up {result.deleted_count} old records from {collection_name}")
+            except Exception as e:
+                print(f"Error cleaning {collection_name}: {e}")
+    except Exception as e:
+        print(f"Error in database cleanup: {e}")
+
 @app.get("/")
 async def root():
     return {
@@ -191,8 +274,10 @@ async def root():
             "/evaluate/sycophancy": "POST - Start a Sycophancy evaluation",
             "/evaluate/air-deception": "POST - Start an AIR-Deception safety evaluation",
             "/result/{task_id}": "GET - Get evaluation results",
-            "/tasks": "GET - List all tasks and statuses",
-            "/health": "GET - Check API health"
+            "/tasks": "GET - List all tasks and statuses (supports ?clear_completed=true&cleanup_old=true)",
+            "/health": "GET - Check API health",
+            "/metrics": "GET - Get detailed performance metrics and database statistics",
+            "/cleanup": "POST - Manually trigger cleanup operations"
         },
         "available_evaluations": {
             "moral_stories": "Evaluate moral reasoning and ethical decision making",
@@ -201,6 +286,13 @@ async def root():
             "arc_challenge": "Evaluate scientific reasoning and knowledge",
             "sycophancy": "Evaluate resistance to sycophantic behavior",
             "air_deception": "Evaluate safety and refusal of harmful requests"
+        },
+        "performance_features": {
+            "memory_monitoring": "Real-time memory usage tracking",
+            "database_cleanup": "Automatic cleanup of old records",
+            "cache_management": "Cache file cleanup and monitoring",
+            "connection_pooling": "Managed database connections with proper cleanup",
+            "garbage_collection": "Automatic memory management"
         }
     }
 
@@ -216,44 +308,49 @@ async def health():
     
     # Check MongoDB connection
     mongo_status = "Not checked"
-    if os.environ.get("MONGODB_URI"):
-        try:
-            db = get_db_connection()
+    processing_tasks_count = 0
+    
+    # Use managed connection for health check
+    try:
+        with get_db_connection_managed() as db:
             mongo_status = "Connected" if db else "Failed to connect"
-        except Exception as e:
-            mongo_status = f"Error: {str(e)}"
-    else:
-        mongo_status = "No MongoDB URI provided"
+            
+            # Get count of processing tasks from database
+            collections = [
+                "baseline_results", "with_context_results",
+                "crows_pairs_baseline_results", "crows_pairs_with_context_results",
+                "truthfulqa_baseline_results", "truthfulqa_with_context_results",
+                "arc_challenge_baseline_results", "arc_challenge_with_context_results",
+                "sycophancy_baseline_results", "sycophancy_with_context_results",
+                "air_deception_baseline_results", "air_deception_with_context_results"
+            ]
+            for collection_name in collections:
+                try:
+                    collection = db[collection_name]
+                    count = collection.count_documents({"status": "processing"})
+                    processing_tasks_count += count
+                except Exception as e:
+                    print(f"Error counting in {collection_name}: {e}")
+    except Exception as e:
+        mongo_status = f"Error: {str(e)}"
+    
+    # Add memory and performance metrics
+    memory_usage = "Unknown"
+    try:
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        memory_usage = f"{memory_info.rss / 1024 / 1024:.1f} MB"
+    except:
+        pass
     
     # Get all environment variable names (not values) for debugging
     env_vars = list(os.environ.keys())
-    
-    # Get count of processing tasks from database
-    processing_tasks_count = 0
-    try:
-        db = get_db_connection()
-        collections = [
-            "baseline_results", "with_context_results",
-            "crows_pairs_baseline_results", "crows_pairs_with_context_results",
-            "truthfulqa_baseline_results", "truthfulqa_with_context_results",
-            "arc_challenge_baseline_results", "arc_challenge_with_context_results",
-            "sycophancy_baseline_results", "sycophancy_with_context_results",
-            "air_deception_baseline_results", "air_deception_with_context_results"
-        ]
-        for collection_name in collections:
-            try:
-                collection = db[collection_name]
-                count = collection.count_documents({"status": "processing"})
-                processing_tasks_count += count
-            except Exception as e:
-                print(f"Error counting in {collection_name}: {e}")
-    except Exception as e:
-        print(f"Error getting processing tasks count: {e}")
     
     return {
         "status": "healthy",
         "python_version": sys.version,
         "platform": platform.platform(),
+        "memory_usage": memory_usage,
         "api_keys": {
             "openai": openai_key_status,
             "anthropic": anthropic_key_status,
@@ -524,54 +621,67 @@ async def get_result(task_id: str):
         }
 
 @app.get("/tasks")
-async def list_tasks(clear_completed: bool = False):
+async def list_tasks(clear_completed: bool = False, cleanup_old: bool = False):
     """List all current evaluation tasks and their status."""
     try:
-        db = get_db_connection()
-        all_tasks = []
-        
-        collections = [
-            "baseline_results", "with_context_results",
-            "crows_pairs_baseline_results", "crows_pairs_with_context_results",
-            "truthfulqa_baseline_results", "truthfulqa_with_context_results",
-            "arc_challenge_baseline_results", "arc_challenge_with_context_results",
-            "sycophancy_baseline_results", "sycophancy_with_context_results",
-            "air_deception_baseline_results", "air_deception_with_context_results"
-        ]
-        
-        for collection_name in collections:
-            try:
-                collection = db[collection_name]
-                
-                # If clear_completed is True, remove completed and error tasks
-                if clear_completed:
-                    result = collection.delete_many({
-                        "status": {"$in": ["completed", "error"]}
-                    })
-                    print(f"Cleared {result.deleted_count} completed/error tasks from {collection_name}")
-                
-                # Get all tasks from this collection
-                tasks = list(collection.find().sort("updated_at", -1).limit(50))
-                
-                for task in tasks:
-                    if "_id" in task:
-                        task["_id"] = str(task["_id"])
-                    if "updated_at" in task:
-                        task["updated_at"] = task["updated_at"].isoformat() if hasattr(task["updated_at"], "isoformat") else str(task["updated_at"])
-                    task["collection"] = collection_name
-                    all_tasks.append(task)
+        with get_db_connection_managed() as db:
+            all_tasks = []
+            
+            # Perform cleanup if requested
+            if cleanup_old:
+                cleanup_old_database_records(db, max_age_days=30)
+                cleanup_old_cache_files("/tmp/hf_cache_moral_stories", max_age_days=7)
+            
+            collections = [
+                "baseline_results", "with_context_results",
+                "crows_pairs_baseline_results", "crows_pairs_with_context_results",
+                "truthfulqa_baseline_results", "truthfulqa_with_context_results",
+                "arc_challenge_baseline_results", "arc_challenge_with_context_results",
+                "sycophancy_baseline_results", "sycophancy_with_context_results",
+                "air_deception_baseline_results", "air_deception_with_context_results"
+            ]
+            
+            for collection_name in collections:
+                try:
+                    collection = db[collection_name]
                     
-            except Exception as e:
-                print(f"Error processing collection {collection_name}: {e}")
-                continue
-        
-        # Sort all tasks by updated_at
-        all_tasks.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
-        
-        return {
-            "tasks": all_tasks[:100],  # Limit to 100 most recent
-            "total_count": len(all_tasks)
-        }
+                    # If clear_completed is True, remove completed and error tasks
+                    if clear_completed:
+                        result = collection.delete_many({
+                            "status": {"$in": ["completed", "error"]}
+                        })
+                        print(f"Cleared {result.deleted_count} completed/error tasks from {collection_name}")
+                    
+                    # Get tasks with proper pagination and indexing
+                    tasks = list(collection.find(
+                        {},
+                        {"_id": 1, "message_id": 1, "status": 1, "updated_at": 1, "model": 1}
+                    ).sort("updated_at", -1).limit(20))  # Reduced limit for performance
+                    
+                    for task in tasks:
+                        if "_id" in task:
+                            task["_id"] = str(task["_id"])
+                        if "updated_at" in task:
+                            task["updated_at"] = task["updated_at"].isoformat() if hasattr(task["updated_at"], "isoformat") else str(task["updated_at"])
+                        task["collection"] = collection_name
+                        all_tasks.append(task)
+                        
+                except Exception as e:
+                    print(f"Error processing collection {collection_name}: {e}")
+                    continue
+            
+            # Sort all tasks by updated_at
+            all_tasks.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+            
+            # Force garbage collection
+            gc.collect()
+            log_memory_usage("tasks listing")
+            
+            return {
+                "tasks": all_tasks[:50],  # Limit to 50 most recent
+                "total_count": len(all_tasks),
+                "cleanup_performed": cleanup_old
+            }
         
     except Exception as e:
         print(f"Error listing tasks: {e}")
@@ -579,6 +689,130 @@ async def list_tasks(clear_completed: bool = False):
             "error": f"Error retrieving tasks: {str(e)}",
             "tasks": [],
             "total_count": 0
+        }
+
+@app.get("/metrics")
+async def get_metrics():
+    """Get detailed performance metrics and database statistics."""
+    try:
+        with get_db_connection_managed() as db:
+            # Memory usage
+            memory_info = {}
+            try:
+                process = psutil.Process()
+                memory_info = {
+                    "rss": f"{process.memory_info().rss / 1024 / 1024:.1f} MB",
+                    "vms": f"{process.memory_info().vms / 1024 / 1024:.1f} MB",
+                    "percent": f"{process.memory_percent():.1f}%"
+                }
+            except:
+                memory_info = {"error": "Unable to get memory info"}
+            
+            # Database statistics
+            collections = [
+                "baseline_results", "with_context_results",
+                "crows_pairs_baseline_results", "crows_pairs_with_context_results",
+                "truthfulqa_baseline_results", "truthfulqa_with_context_results",
+                "arc_challenge_baseline_results", "arc_challenge_with_context_results",
+                "sycophancy_baseline_results", "sycophancy_with_context_results",
+                "air_deception_baseline_results", "air_deception_with_context_results"
+            ]
+            
+            db_stats = {}
+            total_documents = 0
+            
+            for collection_name in collections:
+                try:
+                    collection = db[collection_name]
+                    total_count = collection.count_documents({})
+                    processing_count = collection.count_documents({"status": "processing"})
+                    completed_count = collection.count_documents({"status": "completed"})
+                    error_count = collection.count_documents({"status": "error"})
+                    
+                    db_stats[collection_name] = {
+                        "total": total_count,
+                        "processing": processing_count,
+                        "completed": completed_count,
+                        "error": error_count
+                    }
+                    total_documents += total_count
+                except Exception as e:
+                    db_stats[collection_name] = {"error": str(e)}
+            
+            # Cache directory size
+            cache_size = "Unknown"
+            cache_files = 0
+            try:
+                cache_dir = "/tmp/hf_cache_moral_stories"
+                if os.path.exists(cache_dir):
+                    total_size = 0
+                    for root, dirs, files in os.walk(cache_dir):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            total_size += os.path.getsize(file_path)
+                            cache_files += 1
+                    cache_size = f"{total_size / 1024 / 1024:.1f} MB"
+            except Exception as e:
+                cache_size = f"Error: {str(e)}"
+            
+            return {
+                "memory": memory_info,
+                "database": {
+                    "total_documents": total_documents,
+                    "collections": db_stats
+                },
+                "cache": {
+                    "size": cache_size,
+                    "files": cache_files
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+        
+    except Exception as e:
+        return {
+            "error": f"Error retrieving metrics: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        }
+
+@app.post("/cleanup")
+async def manual_cleanup(
+    max_age_days: int = 30,
+    cleanup_cache: bool = True,
+    force_gc: bool = True
+):
+    """Manually trigger cleanup operations."""
+    try:
+        cleanup_results = {}
+        
+        # Database cleanup
+        with get_db_connection_managed() as db:
+            cleanup_old_database_records(db, max_age_days=max_age_days)
+            cleanup_results["database"] = f"Cleaned records older than {max_age_days} days"
+        
+        # Cache cleanup
+        if cleanup_cache:
+            cleanup_old_cache_files("/tmp/hf_cache_moral_stories", max_age_days=7)
+            cleanup_results["cache"] = "Cleaned cache files older than 7 days"
+        
+        # Force garbage collection
+        if force_gc:
+            import gc
+            collected = gc.collect()
+            cleanup_results["garbage_collection"] = f"Collected {collected} objects"
+        
+        log_memory_usage("manual cleanup")
+        
+        return {
+            "status": "success",
+            "cleanup_results": cleanup_results,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
         }
 
 def run_evaluation(
@@ -593,75 +827,91 @@ def run_evaluation(
     provider: str = "openai"
 ):
     """Run moral stories evaluation and update the existing document."""
-    db = get_db_connection() if not skip_db else None
-    
     try:
-        print(f"\n=== Starting Moral Stories Evaluation (Message ID: {message_id}) ===")
+        log_memory_usage(f"starting evaluation {message_id}")
         
-        # Convert context if needed
-        converted_context = None
-        if context:
-            if isinstance(context, list):
-                try:
-                    converted_context = []
-                    for msg in context:
-                        if hasattr(msg, 'role') and hasattr(msg, 'content'):
-                            converted_context.append({'role': msg.role, 'content': msg.content})
-                        elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
-                            converted_context.append(msg)
-                        else:
-                            raise ValueError(f"Invalid message format: {msg}")
-                    print(f"Converted {len(converted_context)} context messages")
-                except Exception as e:
-                    print(f"Error converting context: {e}")
+        # Clean up cache before starting
+        cleanup_old_cache_files("/tmp/hf_cache_moral_stories", max_age_days=7)
+        
+        with get_db_connection_managed() as db:
+            print(f"\n=== Starting Moral Stories Evaluation (Message ID: {message_id}) ===")
+            
+            # Convert context if needed
+            converted_context = None
+            if context:
+                if isinstance(context, list):
+                    try:
+                        converted_context = []
+                        for msg in context:
+                            if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                                converted_context.append({'role': msg.role, 'content': msg.content})
+                            elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                                converted_context.append(msg)
+                            else:
+                                raise ValueError(f"Invalid message format: {msg}")
+                        print(f"Converted {len(converted_context)} context messages")
+                    except Exception as e:
+                        print(f"Error converting context: {e}")
+                        converted_context = context
+                else:
                     converted_context = context
-            else:
-                converted_context = context
-        
-        # Handle system prompt
-        if system and converted_context:
-            if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
-                converted_context.insert(0, {"role": "system", "content": system})
-                print(f"Added system message to context list")
-        elif system:
-            converted_context = [{"role": "system", "content": system}]
-            print(f"Created new context with system message")
-        
-        # Define progress callback (just for logging, no DB updates)
-        def progress_callback(current, total):
-            percent = (current / total * 100) if total > 0 else 0
-            print(f"Progress: {current}/{total} ({percent:.1f}%)")
-        
-        # Run evaluation (this will create its own document)
-        result = evaluate_moral_stories_with_openai(
-            model_name=model,
-            num_examples=examples,
-            context=converted_context,
-            cache_dir="/tmp/hf_cache_moral_stories",
-            db=db,  # Pass the actual database connection so results get saved
-            message_id=message_id,
-            use_local_dataset=use_local_dataset,
-            provider=provider,
-            progress_callback=progress_callback
-        )
-        
-        print(f"Moral stories evaluation completed successfully for {message_id}")
-        
-        # The evaluation function already updated the document, no need to update again
-        print(f"✅ Evaluation function handled document update for {message_id}")
+            
+            # Handle system prompt
+            if system and converted_context:
+                if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
+                    converted_context.insert(0, {"role": "system", "content": system})
+                    print(f"Added system message to context list")
+            elif system:
+                converted_context = [{"role": "system", "content": system}]
+                print(f"Created new context with system message")
+            
+            # Define progress callback (just for logging, no DB updates)
+            def progress_callback(current, total):
+                percent = (current / total * 100) if total > 0 else 0
+                print(f"Progress: {current}/{total} ({percent:.1f}%)")
+                if current % 10 == 0:  # Log memory every 10 iterations
+                    log_memory_usage(f"evaluation progress {current}/{total}")
+            
+            # Run evaluation (this will create its own document)
+            result = evaluate_moral_stories_with_openai(
+                model_name=model,
+                num_examples=examples,
+                context=converted_context,
+                cache_dir="/tmp/hf_cache_moral_stories",
+                db=db if not skip_db else None,
+                message_id=message_id,
+                use_local_dataset=use_local_dataset,
+                provider=provider,
+                progress_callback=progress_callback
+            )
+            
+            print(f"Moral stories evaluation completed successfully for {message_id}")
+            
+            # Force garbage collection after completion
+            gc.collect()
+            log_memory_usage(f"completed evaluation {message_id}")
+            
+            # The evaluation function already updated the document, no need to update again
+            print(f"✅ Evaluation function handled document update for {message_id}")
         
     except Exception as e:
         error_msg = f"Error in moral stories evaluation: {str(e)}"
         print(error_msg)
         traceback.print_exc()
         
-        if db is not None:
-            update_document_status(
-                db, message_id, "error",
-                error=error_msg,
-                error_at=datetime.now()
-            )
-            print(f"❌ Updated document {message_id} with error status")
+        try:
+            with get_db_connection_managed() as db:
+                update_document_status(
+                    db, message_id, "error",
+                    error=error_msg,
+                    error_at=datetime.now()
+                )
+                print(f"❌ Updated document {message_id} with error status")
+        except Exception as db_error:
+            print(f"Failed to update error status in database: {db_error}")
+        
+        # Clean up on error
+        gc.collect()
 
 def run_crows_pairs_evaluation(
     message_id: str,
@@ -675,74 +925,87 @@ def run_crows_pairs_evaluation(
     provider: str = "openai"
 ):
     """Run CrowS-Pairs evaluation and update the existing document."""
-    db = get_db_connection() if not skip_db else None
-    
     try:
-        print(f"\n=== Starting CrowS-Pairs Evaluation (Message ID: {message_id}) ===")
+        log_memory_usage(f"starting crows_pairs evaluation {message_id}")
         
-        # Convert context if needed
-        converted_context = None
-        if context:
-            if isinstance(context, list):
-                try:
-                    converted_context = []
-                    for msg in context:
-                        if hasattr(msg, 'role') and hasattr(msg, 'content'):
-                            converted_context.append({'role': msg.role, 'content': msg.content})
-                        elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
-                            converted_context.append(msg)
-                        else:
-                            raise ValueError(f"Invalid message format: {msg}")
-                    print(f"Converted {len(converted_context)} context messages")
-                except Exception as e:
-                    print(f"Error converting context: {e}")
+        with get_db_connection_managed() as db:
+            print(f"\n=== Starting CrowS-Pairs Evaluation (Message ID: {message_id}) ===")
+            
+            # Convert context if needed
+            converted_context = None
+            if context:
+                if isinstance(context, list):
+                    try:
+                        converted_context = []
+                        for msg in context:
+                            if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                                converted_context.append({'role': msg.role, 'content': msg.content})
+                            elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                                converted_context.append(msg)
+                            else:
+                                raise ValueError(f"Invalid message format: {msg}")
+                        print(f"Converted {len(converted_context)} context messages")
+                    except Exception as e:
+                        print(f"Error converting context: {e}")
+                        converted_context = context
+                else:
                     converted_context = context
-            else:
-                converted_context = context
-        
-        # Handle system prompt
-        if system and converted_context:
-            if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
-                converted_context.insert(0, {"role": "system", "content": system})
-                print(f"Added system message to context list")
-        elif system:
-            converted_context = [{"role": "system", "content": system}]
-            print(f"Created new context with system message")
-        
-        # Define progress callback (just for logging, no DB updates)
-        def progress_callback(current, total):
-            percent = (current / total * 100) if total > 0 else 0
-            print(f"Progress: {current}/{total} ({percent:.1f}%)")
-        
-        # Run evaluation (this will create its own document)
-        result = evaluate_crows_pairs(
-            model_name=model,
-            num_examples=examples,
-            context=converted_context,
-            system=system,
-            provider=provider,
-            progress_callback=progress_callback,
-            db=db,  # Pass the actual database connection so results get saved
-            message_id=message_id
-        )
-        
-        print(f"CrowS-Pairs evaluation completed successfully for {message_id}")
-        
-        # The evaluation function already updated the document, no need to update again
-        print(f"✅ Evaluation function handled document update for {message_id}")
+            
+            # Handle system prompt
+            if system and converted_context:
+                if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
+                    converted_context.insert(0, {"role": "system", "content": system})
+                    print(f"Added system message to context list")
+            elif system:
+                converted_context = [{"role": "system", "content": system}]
+                print(f"Created new context with system message")
+            
+            # Define progress callback (just for logging, no DB updates)
+            def progress_callback(current, total):
+                percent = (current / total * 100) if total > 0 else 0
+                print(f"Progress: {current}/{total} ({percent:.1f}%)")
+                if current % 10 == 0:  # Log memory every 10 iterations
+                    log_memory_usage(f"crows_pairs progress {current}/{total}")
+            
+            # Run evaluation (this will create its own document)
+            result = evaluate_crows_pairs(
+                model_name=model,
+                num_examples=examples,
+                context=converted_context,
+                system=system,
+                provider=provider,
+                progress_callback=progress_callback,
+                db=db if not skip_db else None,
+                message_id=message_id
+            )
+            
+            print(f"CrowS-Pairs evaluation completed successfully for {message_id}")
+            
+            # Force garbage collection after completion
+            gc.collect()
+            log_memory_usage(f"completed crows_pairs evaluation {message_id}")
+            
+            # The evaluation function already updated the document, no need to update again
+            print(f"✅ Evaluation function handled document update for {message_id}")
         
     except Exception as e:
         error_msg = f"Error in CrowS-Pairs evaluation: {str(e)}"
         print(error_msg)
         traceback.print_exc()
         
-        if db is not None:
-            update_document_status(
-                db, message_id, "error",
-                error=error_msg,
-                error_at=datetime.now()
-            )
-            print(f"❌ Updated document {message_id} with error status")
+        try:
+            with get_db_connection_managed() as db:
+                update_document_status(
+                    db, message_id, "error",
+                    error=error_msg,
+                    error_at=datetime.now()
+                )
+                print(f"❌ Updated document {message_id} with error status")
+        except Exception as db_error:
+            print(f"Failed to update error status in database: {db_error}")
+        
+        # Clean up on error
+        gc.collect()
 
 def run_truthfulqa_evaluation(
     message_id: str,
@@ -756,74 +1019,87 @@ def run_truthfulqa_evaluation(
     provider: str = "openai"
 ):
     """Run TruthfulQA evaluation and update the existing document."""
-    db = get_db_connection() if not skip_db else None
-    
     try:
-        print(f"\n=== Starting TruthfulQA Evaluation (Message ID: {message_id}) ===")
+        log_memory_usage(f"starting truthfulqa evaluation {message_id}")
         
-        # Convert context if needed
-        converted_context = None
-        if context:
-            if isinstance(context, list):
-                try:
-                    converted_context = []
-                    for msg in context:
-                        if hasattr(msg, 'role') and hasattr(msg, 'content'):
-                            converted_context.append({'role': msg.role, 'content': msg.content})
-                        elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
-                            converted_context.append(msg)
-                        else:
-                            raise ValueError(f"Invalid message format: {msg}")
-                    print(f"Converted {len(converted_context)} context messages")
-                except Exception as e:
-                    print(f"Error converting context: {e}")
+        with get_db_connection_managed() as db:
+            print(f"\n=== Starting TruthfulQA Evaluation (Message ID: {message_id}) ===")
+            
+            # Convert context if needed
+            converted_context = None
+            if context:
+                if isinstance(context, list):
+                    try:
+                        converted_context = []
+                        for msg in context:
+                            if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                                converted_context.append({'role': msg.role, 'content': msg.content})
+                            elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                                converted_context.append(msg)
+                            else:
+                                raise ValueError(f"Invalid message format: {msg}")
+                        print(f"Converted {len(converted_context)} context messages")
+                    except Exception as e:
+                        print(f"Error converting context: {e}")
+                        converted_context = context
+                else:
                     converted_context = context
-            else:
-                converted_context = context
-        
-        # Handle system prompt
-        if system and converted_context:
-            if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
-                converted_context.insert(0, {"role": "system", "content": system})
-                print(f"Added system message to context list")
-        elif system:
-            converted_context = [{"role": "system", "content": system}]
-            print(f"Created new context with system message")
-        
-        # Define progress callback (just for logging, no DB updates)
-        def progress_callback(current, total):
-            percent = (current / total * 100) if total > 0 else 0
-            print(f"Progress: {current}/{total} ({percent:.1f}%)")
-        
-        # Run evaluation (this will create its own document)
-        result = evaluate_truthfulqa(
-            model_name=model,
-            num_examples=examples,
-            context=converted_context,
-            system=system,
-            provider=provider,
-            progress_callback=progress_callback,
-            db=db,  # Pass the actual database connection so results get saved
-            message_id=message_id
-        )
-        
-        print(f"TruthfulQA evaluation completed successfully for {message_id}")
-        
-        # The evaluation function already updated the document, no need to update again
-        print(f"✅ Evaluation function handled document update for {message_id}")
+            
+            # Handle system prompt
+            if system and converted_context:
+                if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
+                    converted_context.insert(0, {"role": "system", "content": system})
+                    print(f"Added system message to context list")
+            elif system:
+                converted_context = [{"role": "system", "content": system}]
+                print(f"Created new context with system message")
+            
+            # Define progress callback (just for logging, no DB updates)
+            def progress_callback(current, total):
+                percent = (current / total * 100) if total > 0 else 0
+                print(f"Progress: {current}/{total} ({percent:.1f}%)")
+                if current % 10 == 0:  # Log memory every 10 iterations
+                    log_memory_usage(f"truthfulqa progress {current}/{total}")
+            
+            # Run evaluation (this will create its own document)
+            result = evaluate_truthfulqa(
+                model_name=model,
+                num_examples=examples,
+                context=converted_context,
+                system=system,
+                provider=provider,
+                progress_callback=progress_callback,
+                db=db if not skip_db else None,
+                message_id=message_id
+            )
+            
+            print(f"TruthfulQA evaluation completed successfully for {message_id}")
+            
+            # Force garbage collection after completion
+            gc.collect()
+            log_memory_usage(f"completed truthfulqa evaluation {message_id}")
+            
+            # The evaluation function already updated the document, no need to update again
+            print(f"✅ Evaluation function handled document update for {message_id}")
         
     except Exception as e:
         error_msg = f"Error in TruthfulQA evaluation: {str(e)}"
         print(error_msg)
         traceback.print_exc()
         
-        if db is not None:
-            update_document_status(
-                db, message_id, "error",
-                error=error_msg,
-                error_at=datetime.now()
-            )
-            print(f"❌ Updated document {message_id} with error status")
+        try:
+            with get_db_connection_managed() as db:
+                update_document_status(
+                    db, message_id, "error",
+                    error=error_msg,
+                    error_at=datetime.now()
+                )
+                print(f"❌ Updated document {message_id} with error status")
+        except Exception as db_error:
+            print(f"Failed to update error status in database: {db_error}")
+        
+        # Clean up on error
+        gc.collect()
 
 def run_arc_challenge_evaluation(
     message_id: str,
@@ -837,74 +1113,87 @@ def run_arc_challenge_evaluation(
     provider: str = "openai"
 ):
     """Run Arc-Challenge evaluation and update the existing document."""
-    db = get_db_connection() if not skip_db else None
-    
     try:
-        print(f"\n=== Starting Arc-Challenge Evaluation (Message ID: {message_id}) ===")
+        log_memory_usage(f"starting arc_challenge evaluation {message_id}")
         
-        # Convert context if needed
-        converted_context = None
-        if context:
-            if isinstance(context, list):
-                try:
-                    converted_context = []
-                    for msg in context:
-                        if hasattr(msg, 'role') and hasattr(msg, 'content'):
-                            converted_context.append({'role': msg.role, 'content': msg.content})
-                        elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
-                            converted_context.append(msg)
-                        else:
-                            raise ValueError(f"Invalid message format: {msg}")
-                    print(f"Converted {len(converted_context)} context messages")
-                except Exception as e:
-                    print(f"Error converting context: {e}")
+        with get_db_connection_managed() as db:
+            print(f"\n=== Starting Arc-Challenge Evaluation (Message ID: {message_id}) ===")
+            
+            # Convert context if needed
+            converted_context = None
+            if context:
+                if isinstance(context, list):
+                    try:
+                        converted_context = []
+                        for msg in context:
+                            if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                                converted_context.append({'role': msg.role, 'content': msg.content})
+                            elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                                converted_context.append(msg)
+                            else:
+                                raise ValueError(f"Invalid message format: {msg}")
+                        print(f"Converted {len(converted_context)} context messages")
+                    except Exception as e:
+                        print(f"Error converting context: {e}")
+                        converted_context = context
+                else:
                     converted_context = context
-            else:
-                converted_context = context
-        
-        # Handle system prompt
-        if system and converted_context:
-            if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
-                converted_context.insert(0, {"role": "system", "content": system})
-                print(f"Added system message to context list")
-        elif system:
-            converted_context = [{"role": "system", "content": system}]
-            print(f"Created new context with system message")
-        
-        # Define progress callback (just for logging, no DB updates)
-        def progress_callback(current, total):
-            percent = (current / total * 100) if total > 0 else 0
-            print(f"Progress: {current}/{total} ({percent:.1f}%)")
-        
-        # Run evaluation (this will create its own document)
-        result = evaluate_arc_challenge(
-            model_name=model,
-            num_examples=examples,
-            context=converted_context,
-            system=system,
-            provider=provider,
-            progress_callback=progress_callback,
-            db=db,  # Pass the actual database connection so results get saved
-            message_id=message_id
-        )
-        
-        print(f"Arc-Challenge evaluation completed successfully for {message_id}")
-        
-        # The evaluation function already updated the document, no need to update again
-        print(f"✅ Evaluation function handled document update for {message_id}")
+            
+            # Handle system prompt
+            if system and converted_context:
+                if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
+                    converted_context.insert(0, {"role": "system", "content": system})
+                    print(f"Added system message to context list")
+            elif system:
+                converted_context = [{"role": "system", "content": system}]
+                print(f"Created new context with system message")
+            
+            # Define progress callback (just for logging, no DB updates)
+            def progress_callback(current, total):
+                percent = (current / total * 100) if total > 0 else 0
+                print(f"Progress: {current}/{total} ({percent:.1f}%)")
+                if current % 10 == 0:  # Log memory every 10 iterations
+                    log_memory_usage(f"arc_challenge progress {current}/{total}")
+            
+            # Run evaluation (this will create its own document)
+            result = evaluate_arc_challenge(
+                model_name=model,
+                num_examples=examples,
+                context=converted_context,
+                system=system,
+                provider=provider,
+                progress_callback=progress_callback,
+                db=db if not skip_db else None,
+                message_id=message_id
+            )
+            
+            print(f"Arc-Challenge evaluation completed successfully for {message_id}")
+            
+            # Force garbage collection after completion
+            gc.collect()
+            log_memory_usage(f"completed arc_challenge evaluation {message_id}")
+            
+            # The evaluation function already updated the document, no need to update again
+            print(f"✅ Evaluation function handled document update for {message_id}")
         
     except Exception as e:
         error_msg = f"Error in Arc-Challenge evaluation: {str(e)}"
         print(error_msg)
         traceback.print_exc()
         
-        if db is not None:
-            update_document_status(
-                db, message_id, "error",
-                error=error_msg,
-                error_at=datetime.now()
-            )
-            print(f"❌ Updated document {message_id} with error status")
+        try:
+            with get_db_connection_managed() as db:
+                update_document_status(
+                    db, message_id, "error",
+                    error=error_msg,
+                    error_at=datetime.now()
+                )
+                print(f"❌ Updated document {message_id} with error status")
+        except Exception as db_error:
+            print(f"Failed to update error status in database: {db_error}")
+        
+        # Clean up on error
+        gc.collect()
 
 def run_sycophancy_evaluation(
     message_id: str,
@@ -918,74 +1207,87 @@ def run_sycophancy_evaluation(
     provider: str = "openai"
 ):
     """Run Sycophancy evaluation and update the existing document."""
-    db = get_db_connection() if not skip_db else None
-    
     try:
-        print(f"\n=== Starting Sycophancy Evaluation (Message ID: {message_id}) ===")
+        log_memory_usage(f"starting sycophancy evaluation {message_id}")
         
-        # Convert context if needed
-        converted_context = None
-        if context:
-            if isinstance(context, list):
-                try:
-                    converted_context = []
-                    for msg in context:
-                        if hasattr(msg, 'role') and hasattr(msg, 'content'):
-                            converted_context.append({'role': msg.role, 'content': msg.content})
-                        elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
-                            converted_context.append(msg)
-                        else:
-                            raise ValueError(f"Invalid message format: {msg}")
-                    print(f"Converted {len(converted_context)} context messages")
-                except Exception as e:
-                    print(f"Error converting context: {e}")
+        with get_db_connection_managed() as db:
+            print(f"\n=== Starting Sycophancy Evaluation (Message ID: {message_id}) ===")
+            
+            # Convert context if needed
+            converted_context = None
+            if context:
+                if isinstance(context, list):
+                    try:
+                        converted_context = []
+                        for msg in context:
+                            if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                                converted_context.append({'role': msg.role, 'content': msg.content})
+                            elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                                converted_context.append(msg)
+                            else:
+                                raise ValueError(f"Invalid message format: {msg}")
+                        print(f"Converted {len(converted_context)} context messages")
+                    except Exception as e:
+                        print(f"Error converting context: {e}")
+                        converted_context = context
+                else:
                     converted_context = context
-            else:
-                converted_context = context
-        
-        # Handle system prompt
-        if system and converted_context:
-            if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
-                converted_context.insert(0, {"role": "system", "content": system})
-                print(f"Added system message to context list")
-        elif system:
-            converted_context = [{"role": "system", "content": system}]
-            print(f"Created new context with system message")
-        
-        # Define progress callback (just for logging, no DB updates)
-        def progress_callback(current, total):
-            percent = (current / total * 100) if total > 0 else 0
-            print(f"Progress: {current}/{total} ({percent:.1f}%)")
-        
-        # Run evaluation (this will create its own document)
-        result = evaluate_sycophancy(
-            model_name=model,
-            num_examples=examples,
-            context=converted_context,
-            system=system,
-            provider=provider,
-            progress_callback=progress_callback,
-            db=db,  # Pass the actual database connection so results get saved
-            message_id=message_id
-        )
-        
-        print(f"Sycophancy evaluation completed successfully for {message_id}")
-        
-        # The evaluation function already updated the document, no need to update again
-        print(f"✅ Evaluation function handled document update for {message_id}")
+            
+            # Handle system prompt
+            if system and converted_context:
+                if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
+                    converted_context.insert(0, {"role": "system", "content": system})
+                    print(f"Added system message to context list")
+            elif system:
+                converted_context = [{"role": "system", "content": system}]
+                print(f"Created new context with system message")
+            
+            # Define progress callback (just for logging, no DB updates)
+            def progress_callback(current, total):
+                percent = (current / total * 100) if total > 0 else 0
+                print(f"Progress: {current}/{total} ({percent:.1f}%)")
+                if current % 10 == 0:  # Log memory every 10 iterations
+                    log_memory_usage(f"sycophancy progress {current}/{total}")
+            
+            # Run evaluation (this will create its own document)
+            result = evaluate_sycophancy(
+                model_name=model,
+                num_examples=examples,
+                context=converted_context,
+                system=system,
+                provider=provider,
+                progress_callback=progress_callback,
+                db=db if not skip_db else None,
+                message_id=message_id
+            )
+            
+            print(f"Sycophancy evaluation completed successfully for {message_id}")
+            
+            # Force garbage collection after completion
+            gc.collect()
+            log_memory_usage(f"completed sycophancy evaluation {message_id}")
+            
+            # The evaluation function already updated the document, no need to update again
+            print(f"✅ Evaluation function handled document update for {message_id}")
         
     except Exception as e:
         error_msg = f"Error in Sycophancy evaluation: {str(e)}"
         print(error_msg)
         traceback.print_exc()
         
-        if db is not None:
-            update_document_status(
-                db, message_id, "error",
-                error=error_msg,
-                error_at=datetime.now()
-            )
-            print(f"❌ Updated document {message_id} with error status")
+        try:
+            with get_db_connection_managed() as db:
+                update_document_status(
+                    db, message_id, "error",
+                    error=error_msg,
+                    error_at=datetime.now()
+                )
+                print(f"❌ Updated document {message_id} with error status")
+        except Exception as db_error:
+            print(f"Failed to update error status in database: {db_error}")
+        
+        # Clean up on error
+        gc.collect()
 
 def run_air_deception_evaluation(
     message_id: str,
@@ -999,74 +1301,87 @@ def run_air_deception_evaluation(
     provider: str = "openai"
 ):
     """Run AIR-Deception evaluation and update the existing document."""
-    db = get_db_connection() if not skip_db else None
-    
     try:
-        print(f"\n=== Starting AIR-Deception Evaluation (Message ID: {message_id}) ===")
+        log_memory_usage(f"starting air_deception evaluation {message_id}")
         
-        # Convert context if needed
-        converted_context = None
-        if context:
-            if isinstance(context, list):
-                try:
-                    converted_context = []
-                    for msg in context:
-                        if hasattr(msg, 'role') and hasattr(msg, 'content'):
-                            converted_context.append({'role': msg.role, 'content': msg.content})
-                        elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
-                            converted_context.append(msg)
-                        else:
-                            raise ValueError(f"Invalid message format: {msg}")
-                    print(f"Converted {len(converted_context)} context messages")
-                except Exception as e:
-                    print(f"Error converting context: {e}")
+        with get_db_connection_managed() as db:
+            print(f"\n=== Starting AIR-Deception Evaluation (Message ID: {message_id}) ===")
+            
+            # Convert context if needed
+            converted_context = None
+            if context:
+                if isinstance(context, list):
+                    try:
+                        converted_context = []
+                        for msg in context:
+                            if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                                converted_context.append({'role': msg.role, 'content': msg.content})
+                            elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                                converted_context.append(msg)
+                            else:
+                                raise ValueError(f"Invalid message format: {msg}")
+                        print(f"Converted {len(converted_context)} context messages")
+                    except Exception as e:
+                        print(f"Error converting context: {e}")
+                        converted_context = context
+                else:
                     converted_context = context
-            else:
-                converted_context = context
-        
-        # Handle system prompt
-        if system and converted_context:
-            if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
-                converted_context.insert(0, {"role": "system", "content": system})
-                print(f"Added system message to context list")
-        elif system:
-            converted_context = [{"role": "system", "content": system}]
-            print(f"Created new context with system message")
-        
-        # Define progress callback (just for logging, no DB updates)
-        def progress_callback(current, total):
-            percent = (current / total * 100) if total > 0 else 0
-            print(f"Progress: {current}/{total} ({percent:.1f}%)")
-        
-        # Run evaluation (this will create its own document)
-        result = evaluate_air_deception(
-            model_name=model,
-            num_examples=examples,
-            context=converted_context,
-            system=system,
-            provider=provider,
-            progress_callback=progress_callback,
-            db=db,  # Pass the actual database connection so results get saved
-            message_id=message_id
-        )
-        
-        print(f"AIR-Deception evaluation completed successfully for {message_id}")
-        
-        # The evaluation function already updated the document, no need to update again
-        print(f"✅ Evaluation function handled document update for {message_id}")
+            
+            # Handle system prompt
+            if system and converted_context:
+                if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
+                    converted_context.insert(0, {"role": "system", "content": system})
+                    print(f"Added system message to context list")
+            elif system:
+                converted_context = [{"role": "system", "content": system}]
+                print(f"Created new context with system message")
+            
+            # Define progress callback (just for logging, no DB updates)
+            def progress_callback(current, total):
+                percent = (current / total * 100) if total > 0 else 0
+                print(f"Progress: {current}/{total} ({percent:.1f}%)")
+                if current % 10 == 0:  # Log memory every 10 iterations
+                    log_memory_usage(f"air_deception progress {current}/{total}")
+            
+            # Run evaluation (this will create its own document)
+            result = evaluate_air_deception(
+                model_name=model,
+                num_examples=examples,
+                context=converted_context,
+                system=system,
+                provider=provider,
+                progress_callback=progress_callback,
+                db=db if not skip_db else None,
+                message_id=message_id
+            )
+            
+            print(f"AIR-Deception evaluation completed successfully for {message_id}")
+            
+            # Force garbage collection after completion
+            gc.collect()
+            log_memory_usage(f"completed air_deception evaluation {message_id}")
+            
+            # The evaluation function already updated the document, no need to update again
+            print(f"✅ Evaluation function handled document update for {message_id}")
         
     except Exception as e:
         error_msg = f"Error in AIR-Deception evaluation: {str(e)}"
         print(error_msg)
         traceback.print_exc()
         
-        if db is not None:
-            update_document_status(
-                db, message_id, "error",
-                error=error_msg,
-                error_at=datetime.now()
-            )
-            print(f"❌ Updated document {message_id} with error status")
+        try:
+            with get_db_connection_managed() as db:
+                update_document_status(
+                    db, message_id, "error",
+                    error=error_msg,
+                    error_at=datetime.now()
+                )
+                print(f"❌ Updated document {message_id} with error status")
+        except Exception as db_error:
+            print(f"Failed to update error status in database: {db_error}")
+        
+        # Clean up on error
+        gc.collect()
 
 if __name__ == "__main__":
     import uvicorn
