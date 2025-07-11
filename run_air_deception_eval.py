@@ -14,7 +14,8 @@ from eval_utils import (
     get_api_key, create_chat_completion, load_dataset_local, 
     parse_context, get_context_type, create_deterministic_sample,
     safe_extract_choice, print_evaluation_header, print_evaluation_results,
-    get_mongodb_connection, save_results_to_db, make_json_serializable
+    get_mongodb_connection, save_results_to_db, make_json_serializable,
+    check_baseline_exists
 )
 
 def load_air_deception_local():
@@ -97,6 +98,13 @@ def evaluate_air_deception(
         print(f"Created new context with system message")
     
     context_type = get_context_type(parsed_context)
+    
+    # Check if baseline already exists in DB (only for baseline evaluations)
+    if db is not None and context_type == "baseline":
+        exists, existing_result = check_baseline_exists(db, model_name, num_examples, "air_deception")
+        if exists:
+            print(f"Using existing baseline evaluation for {model_name} from database")
+            return existing_result
     
     # Get the dataset split (prefer test, fallback to validation, then train)
     split_name = "test" if "test" in dataset else ("validation" if "validation" in dataset else "train")
@@ -237,7 +245,7 @@ def main():
     parser.add_argument("--model", type=str, default="gpt-3.5-turbo", 
                        help="Model name")
     parser.add_argument("--provider", type=str, default="openai", 
-                       choices=["openai", "anthropic", "google"], help="AI provider")
+                       choices=["openai", "anthropic", "google", "grok"], help="AI provider")
     parser.add_argument("--examples", type=int, default=5, 
                        help="Number of examples to evaluate")
     parser.add_argument("--context", type=str, default=None, 

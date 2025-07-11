@@ -34,6 +34,9 @@ def get_api_key(provider="openai"):
     if "GEMINI_API_KEY" in env_vars:
         api_keys_found.append("GEMINI_API_KEY")
     
+    if "GROK_API_KEY" in env_vars:
+        api_keys_found.append("GROK_API_KEY")
+    
     print(f"API keys found in environment: {', '.join(api_keys_found) if api_keys_found else 'None'}")
     
     if provider == "anthropic":
@@ -48,6 +51,12 @@ def get_api_key(provider="openai"):
             print(f"Found Google/Gemini API key (length: {len(api_key)})")
             return "google", api_key
         raise ValueError("Google/Gemini API key not found. Please set GEMINI_API_KEY in your environment or .env file.")
+    elif provider == "grok":
+        api_key = os.environ.get("GROK_API_KEY")
+        if api_key:
+            print(f"Found xAI/Grok API key (length: {len(api_key)})")
+            return "grok", api_key
+        raise ValueError("xAI/Grok API key not found. Please set GROK_API_KEY in your environment or .env file.")
     else:
         api_key = os.environ.get("OPENAI_API_KEY")
         if api_key:
@@ -56,11 +65,13 @@ def get_api_key(provider="openai"):
         raise ValueError("OpenAI API key not found. Please set OPENAI_API_KEY in your environment or .env file.")
 
 def create_chat_completion(provider: str, model: str, messages: List[Dict[str, str]]) -> str:
-    """Create a chat completion using OpenAI, Anthropic, or Google based on provider."""
+    """Create a chat completion using OpenAI, Anthropic, Google, or Grok based on provider."""
     if provider == "anthropic":
         return create_anthropic_chat_completion(model, messages)
     elif provider == "google":
         return create_google_chat_completion(model, messages)
+    elif provider == "grok":
+        return create_grok_chat_completion(model, messages)
     else:
         return create_openai_chat_completion(model, messages)
 
@@ -73,6 +84,58 @@ def create_openai_chat_completion(model: str, messages: List[Dict[str, str]]) ->
         "Authorization": f"Bearer {api_key}"
     }
     
+    # Special handling for o3 family models that use v1/responses endpoint
+    if model.startswith("o3"):
+        payload = {
+            "model": model,
+            "input": messages,
+            "stream": False
+        }
+        
+        response = requests.post(
+            "https://api.openai.com/v1/responses",
+            headers=headers,
+            json=payload
+        )
+        
+        if response.status_code != 200:
+            raise Exception(f"OpenAI Responses API Error: {response.status_code}, {response.text}")
+        
+        response_data = response.json()
+        
+        # Handle different possible response formats from responses endpoint
+        if "output" in response_data and isinstance(response_data["output"], list):
+            # Look for the message type in the output array
+            for output_item in response_data["output"]:
+                if output_item.get("type") == "message" and "content" in output_item:
+                    # Extract text from the content array
+                    content_items = output_item["content"]
+                    if isinstance(content_items, list):
+                        for content_item in content_items:
+                            if content_item.get("type") == "output_text" and "text" in content_item:
+                                return content_item["text"]
+                    elif isinstance(content_items, str):
+                        return content_items
+            
+            # Fallback: try first output item if it has content or text directly
+            if len(response_data["output"]) > 0:
+                output = response_data["output"][0]
+                if "content" in output:
+                    return output["content"]
+                elif "text" in output:
+                    return output["text"]
+        elif "output" in response_data and isinstance(response_data["output"], str):
+            return response_data["output"]
+        elif "content" in response_data:
+            return response_data["content"]
+        elif "text" in response_data:
+            return response_data["text"]
+        elif "response" in response_data and "output" in response_data["response"]:
+            return response_data["response"]["output"]
+        
+        raise Exception(f"OpenAI Responses API response missing expected content: {response_data}")
+    
+    # Regular chat completion handling for other models
     payload = {
         "model": model,
         "messages": messages
@@ -85,7 +148,7 @@ def create_openai_chat_completion(model: str, messages: List[Dict[str, str]]) ->
     )
     
     if response.status_code != 200:
-        raise Exception(f"API Error: {response.status_code}, {response.text}")
+        raise Exception(f"OpenAI Chat API Error: {response.status_code}, {response.text}")
     
     return response.json()["choices"][0]["message"]["content"]
 
@@ -240,6 +303,43 @@ def create_google_chat_completion(model: str, messages: List[Dict[str, str]]) ->
             raise Exception(f"Google API response candidate missing 'content' field: {candidate}")
     
     raise Exception(f"Google API response missing candidates or empty candidates list: {response_data}")
+
+def create_grok_chat_completion(model: str, messages: List[Dict[str, str]]) -> str:
+    """Call the xAI/Grok Chat Completions API with a list of messages."""
+    api_type, api_key = get_api_key("grok")
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": 1024,
+        "temperature": 0.1
+    }
+    
+    response = requests.post(
+        "https://api.x.ai/v1/chat/completions",
+        headers=headers,
+        json=payload
+    )
+    
+    if response.status_code != 200:
+        raise Exception(f"xAI/Grok API Error: {response.status_code}, {response.text}")
+    
+    response_data = response.json()
+    
+    # Handle xAI/Grok response format (similar to OpenAI)
+    if "choices" in response_data and len(response_data["choices"]) > 0:
+        choice = response_data["choices"][0]
+        if "message" in choice and "content" in choice["message"]:
+            return choice["message"]["content"]
+        else:
+            raise Exception(f"xAI/Grok API response missing message content: {choice}")
+    
+    raise Exception(f"xAI/Grok API response missing choices: {response_data}")
 
 def load_dataset_local(dataset_name: str, expected_files: List[str] = None):
     """
@@ -656,6 +756,32 @@ def make_json_serializable(obj):
             return obj
         except (TypeError, OverflowError):
             return str(obj)
+
+def check_baseline_exists(db, model_name: str, num_examples: int, dataset_type: str = "general"):
+    """Check if baseline evaluation exists for this model in the database."""
+    if db is None:
+        return False, None
+        
+    try:
+        # Determine collection name for baseline
+        if dataset_type == "general":
+            collection_name = "baseline_results"
+        else:
+            collection_name = f"{dataset_type}_baseline_results"
+        
+        collection = db[collection_name]
+        result = collection.find_one({
+            "model": model_name,
+            "context_type": "baseline",
+            "total_examples": {"$gte": num_examples}
+        })
+        if result:
+            print(f"Found existing baseline evaluation for {model_name} with {result['total_examples']} examples in {collection_name}")
+            return True, result
+        return False, None
+    except Exception as e:
+        print(f"Error checking database for baseline: {e}")
+        return False, None
 
 def get_mongodb_connection():
     """Get MongoDB connection from .env file or environment variables."""

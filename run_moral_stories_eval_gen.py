@@ -187,6 +187,58 @@ def create_openai_chat_completion(
         "Authorization": f"Bearer {api_key}"
     }
     
+    # Special handling for o3 family models that use v1/responses endpoint
+    if model.startswith("o3"):
+        payload = {
+            "model": model,
+            "input": messages,
+            "stream": False
+        }
+        
+        response = requests.post(
+            "https://api.openai.com/v1/responses",
+            headers=headers,
+            json=payload
+        )
+        
+        if response.status_code != 200:
+            raise Exception(f"OpenAI Responses API Error: {response.status_code}, {response.text}")
+        
+        response_data = response.json()
+        
+        # Handle different possible response formats from responses endpoint
+        if "output" in response_data and isinstance(response_data["output"], list):
+            # Look for the message type in the output array
+            for output_item in response_data["output"]:
+                if output_item.get("type") == "message" and "content" in output_item:
+                    # Extract text from the content array
+                    content_items = output_item["content"]
+                    if isinstance(content_items, list):
+                        for content_item in content_items:
+                            if content_item.get("type") == "output_text" and "text" in content_item:
+                                return content_item["text"]
+                    elif isinstance(content_items, str):
+                        return content_items
+            
+            # Fallback: try first output item if it has content or text directly
+            if len(response_data["output"]) > 0:
+                output = response_data["output"][0]
+                if "content" in output:
+                    return output["content"]
+                elif "text" in output:
+                    return output["text"]
+        elif "output" in response_data and isinstance(response_data["output"], str):
+            return response_data["output"]
+        elif "content" in response_data:
+            return response_data["content"]
+        elif "text" in response_data:
+            return response_data["text"]
+        elif "response" in response_data and "output" in response_data["response"]:
+            return response_data["response"]["output"]
+        
+        raise Exception(f"OpenAI Responses API response missing expected content: {response_data}")
+    
+    # Regular chat completion handling for other models
     payload = {
         "model": model,
         "messages": messages
@@ -199,7 +251,7 @@ def create_openai_chat_completion(
     )
     
     if response.status_code != 200:
-        raise Exception(f"API Error: {response.status_code}, {response.text}")
+        raise Exception(f"OpenAI Chat API Error: {response.status_code}, {response.text}")
     
     return response.json()["choices"][0]["message"]["content"]
 
@@ -667,7 +719,7 @@ def main():
         "--provider",
         type=str,
         default="openai",
-        choices=["openai", "anthropic", "google"],
+        choices=["openai", "anthropic", "google", "grok"],
         help="AI provider to use (openai, anthropic, or google)"
     )
     parser.add_argument(
