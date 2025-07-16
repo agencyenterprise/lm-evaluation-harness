@@ -17,8 +17,6 @@ import psutil
 
 # Import the evaluation functions
 try:
-    from run_moral_stories_eval_gen import evaluate_moral_stories_with_openai, get_mongodb_connection
-    from run_crows_pairs_eval import evaluate_crows_pairs
     from run_truthfulqa_eval import evaluate_truthfulqa
     from run_arc_challenge_eval import evaluate_arc_challenge
     from run_sycophancy_eval import evaluate_sycophancy
@@ -52,34 +50,12 @@ class MessageModel(BaseModel):
     role: str
     content: str
 
-class EvaluationRequest(BaseModel):
-    model: str
-    examples: int = 5
-    context: Optional[Union[List[MessageModel], str]] = None
-    system: Optional[str] = None
-    message_id: str  # Required - frontend must provide this
-    force_download: bool = False
-    skip_db: bool = False
-    use_local_dataset: bool = True
-    provider: str = "openai"  # 'openai', 'anthropic', 'google', or 'grok'
-
 class EvaluationResponse(BaseModel):
     task_id: str
     status: str
     message: str
 
 # Specific request models for different evaluation types
-class CrowsPairsRequest(BaseModel):
-    model: str
-    examples: int = 5
-    context: Optional[Union[List[MessageModel], str]] = None
-    system: Optional[str] = None
-    message_id: str  # Required - frontend must provide this
-    force_download: bool = False
-    skip_db: bool = False
-    use_local_dataset: bool = True
-    provider: str = "openai"  # 'openai', 'anthropic', 'google', or 'grok'
-
 class TruthfulQARequest(BaseModel):
     model: str
     examples: int = 5
@@ -89,7 +65,7 @@ class TruthfulQARequest(BaseModel):
     force_download: bool = False
     skip_db: bool = False
     use_local_dataset: bool = True
-    provider: str = "openai"  # 'openai', 'anthropic', 'google', or 'grok'
+    provider: str = "openai"  # 'openai', 'anthropic', 'google', 'grok', or 'moonshot'
 
 class ArcChallengeRequest(BaseModel):
     model: str
@@ -100,7 +76,7 @@ class ArcChallengeRequest(BaseModel):
     force_download: bool = False
     skip_db: bool = False
     use_local_dataset: bool = True
-    provider: str = "openai"  # 'openai', 'anthropic', 'google', or 'grok'
+    provider: str = "openai"  # 'openai', 'anthropic', 'google', 'grok', or 'moonshot'
 
 class SycophancyRequest(BaseModel):
     model: str
@@ -111,7 +87,7 @@ class SycophancyRequest(BaseModel):
     force_download: bool = False
     skip_db: bool = False
     use_local_dataset: bool = True
-    provider: str = "openai"  # 'openai', 'anthropic', 'google', or 'grok'
+    provider: str = "openai"  # 'openai', 'anthropic', 'google', 'grok', or 'moonshot'
 
 class AirDeceptionRequest(BaseModel):
     model: str
@@ -122,7 +98,7 @@ class AirDeceptionRequest(BaseModel):
     force_download: bool = False
     skip_db: bool = False
     use_local_dataset: bool = True
-    provider: str = "openai"  # 'openai', 'anthropic', 'google', or 'grok'
+    provider: str = "openai"  # 'openai', 'anthropic', 'google', 'grok', or 'moonshot'
 
 def get_collection_name(evaluation_type: str, has_context: bool) -> str:
     """Get the collection name based on evaluation type and context."""
@@ -363,69 +339,9 @@ async def health():
         "tasks_in_progress": processing_tasks_count
     }
 
-@app.post("/evaluate")
-async def evaluate(request: EvaluationRequest, background_tasks: BackgroundTasks):
-    """Start moral stories evaluation. Frontend creates document with processing status."""
-    message_id = request.message_id
-    
-    print(f"\n=== Starting Moral Stories Evaluation ===")
-    print(f"Message ID: {message_id}")
-    print(f"Model: {request.model}")
-    print(f"Provider: {request.provider}")
-    print(f"Examples: {request.examples}")
-    print("=" * 50)
-    
-    # Start background task (document already created by frontend)
-    background_tasks.add_task(
-        run_evaluation,
-        message_id=message_id,
-        model=request.model,
-        examples=request.examples,
-        context=request.context,
-        system=request.system,
-        force_download=request.force_download,
-        skip_db=request.skip_db,
-        use_local_dataset=request.use_local_dataset,
-        provider=request.provider
-    )
-    
-    return {
-        "task_id": message_id,
-        "status": "processing",
-        "message": f"Moral stories evaluation started for model {request.model}"
-    }
 
-@app.post("/evaluate/crows-pairs")
-async def evaluate_crows_pairs_endpoint(request: CrowsPairsRequest, background_tasks: BackgroundTasks):
-    """Start CrowS-Pairs evaluation. Frontend creates document with processing status."""
-    message_id = request.message_id
-    
-    print(f"\n=== Starting CrowS-Pairs Evaluation ===")
-    print(f"Message ID: {message_id}")
-    print(f"Model: {request.model}")
-    print(f"Provider: {request.provider}")
-    print(f"Examples: {request.examples}")
-    print("=" * 50)
-    
-    # Start background task (document already created by frontend)
-    background_tasks.add_task(
-        run_crows_pairs_evaluation,
-        message_id=message_id,
-        model=request.model,
-        examples=request.examples,
-        context=request.context,
-        system=request.system,
-        force_download=request.force_download,
-        skip_db=request.skip_db,
-        use_local_dataset=request.use_local_dataset,
-        provider=request.provider
-    )
-    
-    return {
-        "task_id": message_id,
-        "status": "processing",
-        "message": f"CrowS-Pairs evaluation started for model {request.model}"
-    }
+
+
 
 @app.post("/evaluate/truthfulqa")
 async def evaluate_truthfulqa_endpoint(request: TruthfulQARequest, background_tasks: BackgroundTasks):
@@ -817,197 +733,9 @@ async def manual_cleanup(
             "timestamp": datetime.now().isoformat()
         }
 
-def run_evaluation(
-    message_id: str,
-    model: str,
-    examples: int,
-    context: Optional[Union[List[Dict[str, str]], str]],
-    system: Optional[str],
-    force_download: bool,
-    skip_db: bool,
-    use_local_dataset: bool = True,
-    provider: str = "openai"
-):
-    """Run moral stories evaluation and update the existing document."""
-    try:
-        log_memory_usage(f"starting evaluation {message_id}")
-        
-        # Clean up cache before starting
-        cleanup_old_cache_files("/tmp/hf_cache_moral_stories", max_age_days=7)
-        
-        with get_db_connection_managed() as db:
-            print(f"\n=== Starting Moral Stories Evaluation (Message ID: {message_id}) ===")
-            
-            # Convert context if needed
-            converted_context = None
-            if context:
-                if isinstance(context, list):
-                    try:
-                        converted_context = []
-                        for msg in context:
-                            if hasattr(msg, 'role') and hasattr(msg, 'content'):
-                                converted_context.append({'role': msg.role, 'content': msg.content})
-                            elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
-                                converted_context.append(msg)
-                            else:
-                                raise ValueError(f"Invalid message format: {msg}")
-                        print(f"Converted {len(converted_context)} context messages")
-                    except Exception as e:
-                        print(f"Error converting context: {e}")
-                        converted_context = context
-                else:
-                    converted_context = context
-            
-            # Handle system prompt
-            if system and converted_context:
-                if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
-                    converted_context.insert(0, {"role": "system", "content": system})
-                    print(f"Added system message to context list")
-            elif system:
-                converted_context = [{"role": "system", "content": system}]
-                print(f"Created new context with system message")
-            
-            # Define progress callback (just for logging, no DB updates)
-            def progress_callback(current, total):
-                percent = (current / total * 100) if total > 0 else 0
-                print(f"Progress: {current}/{total} ({percent:.1f}%)")
-                if current % 10 == 0:  # Log memory every 10 iterations
-                    log_memory_usage(f"evaluation progress {current}/{total}")
-            
-            # Run evaluation (this will create its own document)
-            result = evaluate_moral_stories_with_openai(
-                model_name=model,
-                num_examples=examples,
-                context=converted_context,
-                cache_dir="/tmp/hf_cache_moral_stories",
-                db=db if not skip_db else None,
-                message_id=message_id,
-                use_local_dataset=use_local_dataset,
-                provider=provider,
-                progress_callback=progress_callback
-            )
-            
-            print(f"Moral stories evaluation completed successfully for {message_id}")
-            
-            # Force garbage collection after completion
-            gc.collect()
-            log_memory_usage(f"completed evaluation {message_id}")
-            
-            # The evaluation function already updated the document, no need to update again
-            print(f"✅ Evaluation function handled document update for {message_id}")
-        
-    except Exception as e:
-        error_msg = f"Error in moral stories evaluation: {str(e)}"
-        print(error_msg)
-        traceback.print_exc()
-        
-        try:
-            with get_db_connection_managed() as db:
-                update_document_status(
-                    db, message_id, "error",
-                    error=error_msg,
-                    error_at=datetime.now()
-                )
-                print(f"❌ Updated document {message_id} with error status")
-        except Exception as db_error:
-            print(f"Failed to update error status in database: {db_error}")
-        
-        # Clean up on error
-        gc.collect()
 
-def run_crows_pairs_evaluation(
-    message_id: str,
-    model: str,
-    examples: int,
-    context: Optional[Union[List[Dict[str, str]], str]],
-    system: Optional[str],
-    force_download: bool,
-    skip_db: bool,
-    use_local_dataset: bool = True,
-    provider: str = "openai"
-):
-    """Run CrowS-Pairs evaluation and update the existing document."""
-    try:
-        log_memory_usage(f"starting crows_pairs evaluation {message_id}")
-        
-        with get_db_connection_managed() as db:
-            print(f"\n=== Starting CrowS-Pairs Evaluation (Message ID: {message_id}) ===")
-            
-            # Convert context if needed
-            converted_context = None
-            if context:
-                if isinstance(context, list):
-                    try:
-                        converted_context = []
-                        for msg in context:
-                            if hasattr(msg, 'role') and hasattr(msg, 'content'):
-                                converted_context.append({'role': msg.role, 'content': msg.content})
-                            elif isinstance(msg, dict) and 'role' in msg and 'content' in msg:
-                                converted_context.append(msg)
-                            else:
-                                raise ValueError(f"Invalid message format: {msg}")
-                        print(f"Converted {len(converted_context)} context messages")
-                    except Exception as e:
-                        print(f"Error converting context: {e}")
-                        converted_context = context
-                else:
-                    converted_context = context
-            
-            # Handle system prompt
-            if system and converted_context:
-                if isinstance(converted_context, list) and not any(msg.get('role') == 'system' for msg in converted_context if isinstance(msg, dict)):
-                    converted_context.insert(0, {"role": "system", "content": system})
-                    print(f"Added system message to context list")
-            elif system:
-                converted_context = [{"role": "system", "content": system}]
-                print(f"Created new context with system message")
-            
-            # Define progress callback (just for logging, no DB updates)
-            def progress_callback(current, total):
-                percent = (current / total * 100) if total > 0 else 0
-                print(f"Progress: {current}/{total} ({percent:.1f}%)")
-                if current % 10 == 0:  # Log memory every 10 iterations
-                    log_memory_usage(f"crows_pairs progress {current}/{total}")
-            
-            # Run evaluation (this will create its own document)
-            result = evaluate_crows_pairs(
-                model_name=model,
-                num_examples=examples,
-                context=converted_context,
-                system=system,
-                provider=provider,
-                progress_callback=progress_callback,
-                db=db if not skip_db else None,
-                message_id=message_id
-            )
-            
-            print(f"CrowS-Pairs evaluation completed successfully for {message_id}")
-            
-            # Force garbage collection after completion
-            gc.collect()
-            log_memory_usage(f"completed crows_pairs evaluation {message_id}")
-            
-            # The evaluation function already updated the document, no need to update again
-            print(f"✅ Evaluation function handled document update for {message_id}")
-        
-    except Exception as e:
-        error_msg = f"Error in CrowS-Pairs evaluation: {str(e)}"
-        print(error_msg)
-        traceback.print_exc()
-        
-        try:
-            with get_db_connection_managed() as db:
-                update_document_status(
-                    db, message_id, "error",
-                    error=error_msg,
-                    error_at=datetime.now()
-                )
-                print(f"❌ Updated document {message_id} with error status")
-        except Exception as db_error:
-            print(f"Failed to update error status in database: {db_error}")
-        
-        # Clean up on error
-        gc.collect()
+
+
 
 def run_truthfulqa_evaluation(
     message_id: str,

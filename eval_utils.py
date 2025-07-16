@@ -37,6 +37,9 @@ def get_api_key(provider="openai"):
     if "GROK_API_KEY" in env_vars:
         api_keys_found.append("GROK_API_KEY")
     
+    if "MOONSHOT_API_KEY" in env_vars:
+        api_keys_found.append("MOONSHOT_API_KEY")
+    
     print(f"API keys found in environment: {', '.join(api_keys_found) if api_keys_found else 'None'}")
     
     if provider == "anthropic":
@@ -57,6 +60,12 @@ def get_api_key(provider="openai"):
             print(f"Found xAI/Grok API key (length: {len(api_key)})")
             return "grok", api_key
         raise ValueError("xAI/Grok API key not found. Please set GROK_API_KEY in your environment or .env file.")
+    elif provider == "moonshot":
+        api_key = os.environ.get("MOONSHOT_API_KEY")
+        if api_key:
+            print(f"Found Moonshot API key (length: {len(api_key)})")
+            return "moonshot", api_key
+        raise ValueError("Moonshot API key not found. Please set MOONSHOT_API_KEY in your environment or .env file.")
     else:
         api_key = os.environ.get("OPENAI_API_KEY")
         if api_key:
@@ -65,13 +74,15 @@ def get_api_key(provider="openai"):
         raise ValueError("OpenAI API key not found. Please set OPENAI_API_KEY in your environment or .env file.")
 
 def create_chat_completion(provider: str, model: str, messages: List[Dict[str, str]]) -> str:
-    """Create a chat completion using OpenAI, Anthropic, Google, or Grok based on provider."""
+    """Create a chat completion using OpenAI, Anthropic, Google, Grok, or Moonshot based on provider."""
     if provider == "anthropic":
         return create_anthropic_chat_completion(model, messages)
     elif provider == "google":
         return create_google_chat_completion(model, messages)
     elif provider == "grok":
         return create_grok_chat_completion(model, messages)
+    elif provider == "moonshot":
+        return create_moonshot_chat_completion(model, messages)
     else:
         return create_openai_chat_completion(model, messages)
 
@@ -149,6 +160,31 @@ def create_openai_chat_completion(model: str, messages: List[Dict[str, str]]) ->
     
     if response.status_code != 200:
         raise Exception(f"OpenAI Chat API Error: {response.status_code}, {response.text}")
+    
+    return response.json()["choices"][0]["message"]["content"]
+
+def create_moonshot_chat_completion(model: str, messages: List[Dict[str, str]]) -> str:
+    """Call the Moonshot Chat Completions API (OpenAI-compatible) with a list of messages."""
+    api_type, api_key = get_api_key("moonshot")
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    
+    payload = {
+        "model": model,
+        "messages": messages
+    }
+    
+    response = requests.post(
+        "https://api.moonshot.ai/v1/chat/completions",
+        headers=headers,
+        json=payload
+    )
+    
+    if response.status_code != 200:
+        raise Exception(f"Moonshot Chat API Error: {response.status_code}, {response.text}")
     
     return response.json()["choices"][0]["message"]["content"]
 

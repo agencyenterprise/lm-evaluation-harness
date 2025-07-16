@@ -227,7 +227,7 @@ def main():
     parser.add_argument("--model", type=str, default="gpt-3.5-turbo", 
                        help="Model name")
     parser.add_argument("--provider", type=str, default="openai", 
-                       choices=["openai", "anthropic", "google", "grok"], help="AI provider")
+                       choices=["openai", "anthropic", "google", "grok", "moonshot"], help="AI provider")
     parser.add_argument("--examples", type=int, default=5, 
                        help="Number of examples to evaluate")
     parser.add_argument("--context", type=str, default=None, 
