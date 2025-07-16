@@ -147,6 +147,9 @@ def create_openai_chat_completion(model: str, messages: List[Dict[str, str]]) ->
         raise Exception(f"OpenAI Responses API response missing expected content: {response_data}")
     
     # Regular chat completion handling for other models
+    if model == "gpt-4o-ft":
+        model = "ft:gpt-4o-2024-08-06:aestudio::B9NW0GYv"
+
     payload = {
         "model": model,
         "messages": messages
